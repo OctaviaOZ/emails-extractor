@@ -6,7 +6,7 @@ authors = ["Octavia <octavia@example.com>"]
 packages = [{include = "app"}]
 
 [tool.poetry.dependencies]
-python = "^3.10"
+python = "^3.11"
 google-api-python-client = "^2.150.0"
 google-auth-httplib2 = "^0.2.0"
 google-auth-oauthlib = "^1.2.0"
