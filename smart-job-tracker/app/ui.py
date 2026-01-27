@@ -5,6 +5,7 @@ from datetime import datetime
 import plotly.express as px
 import os
 import yaml
+import re
 from dotenv import load_dotenv
 from dateutil import parser
 
@@ -91,12 +92,21 @@ def sync_emails(engine):
             if not full_msg: continue
 
             # Skip restricted senders or domains
-            sender_email = full_msg.get('sender', '').lower()
+            sender_full = full_msg.get('sender', '')
+            sender_name = ""
+            sender_email = sender_full
             
+            if '<' in sender_full:
+                match = re.match(r'^(.*?)\s*<(.+)>', sender_full)
+                if match:
+                    sender_name, sender_email = match.groups()
+                    sender_name = sender_name.strip().replace('"', '')
+                    sender_email = sender_email.strip()
+
             should_skip = False
-            if any(email.lower() in sender_email for email in skip_emails):
+            if any(email.lower() in sender_email.lower() for email in skip_emails):
                 should_skip = True
-            elif any(domain.lower() in sender_email for domain in skip_domains):
+            elif any(domain.lower() in sender_email.lower() for domain in skip_domains):
                 should_skip = True
                 
             if should_skip:
@@ -104,9 +114,13 @@ def sync_emails(engine):
                 progress_bar.progress((i + 1) / total_msgs)
                 continue
 
-            # Parse Date
+            # Parse Date - Use internalDate if available for precision
             email_dt = datetime.now()
-            if full_msg.get('date'):
+            if full_msg.get('internalDate'):
+                try:
+                    email_dt = datetime.fromtimestamp(int(full_msg['internalDate']) / 1000.0)
+                except: pass
+            elif full_msg.get('date'):
                 try:
                     email_dt = parser.parse(full_msg['date']).replace(tzinfo=None)
                 except: pass
@@ -114,24 +128,29 @@ def sync_emails(engine):
             # Extract Data
             data = extractor.extract(full_msg['subject'], full_msg['sender'], full_msg['text'], full_msg['html'])
             
-            if data.company_name == "Unknown":
+            company_name_variable = data.company_name
+            
+            if company_name_variable == "Unknown":
                 session.add(ProcessedEmail(email_id=msg_id, company_name="Unknown"))
                 progress_bar.progress((i + 1) / total_msgs)
                 continue
 
             # Process Tracking Logic
-            app = session.exec(select(JobApplication).where(JobApplication.company_name == data.company_name)).first()
+            app = session.exec(select(JobApplication).where(JobApplication.company_name == company_name_variable)).first()
             
             if not app:
                 # Create new process
                 app = JobApplication(
-                    company_name=data.company_name,
+                    company_name=company_name_variable,
                     position=data.position,
                     status=data.status,
+                    sender_name=sender_name,
+                    sender_email=sender_email,
                     applied_at=email_dt,
                     last_updated=email_dt,
                     email_subject=full_msg['subject'],
                     email_snippet=full_msg['snippet'],
+                    summary=data.summary,
                     year=email_dt.year,
                     month=email_dt.month,
                     day=email_dt.day
@@ -148,11 +167,14 @@ def sync_emails(engine):
                 # Update last updated if this email is newer
                 if email_dt > app.last_updated:
                     app.last_updated = email_dt
+                    app.sender_name = sender_name
+                    app.sender_email = sender_email
                     app.email_subject = full_msg['subject']
                     app.email_snippet = full_msg['snippet']
+                    app.summary = data.summary
 
             # Mark email as processed
-            session.add(ProcessedEmail(email_id=msg_id, company_name=data.company_name))
+            session.add(ProcessedEmail(email_id=msg_id, company_name=company_name_variable))
             new_emails_count += 1
             progress_bar.progress((i + 1) / total_msgs)
         
@@ -179,7 +201,8 @@ def main():
                 apps = session.exec(select(JobApplication)).all()
                 if apps:
                     report_path = os.path.join(base_dir, "report.pdf")
-                    generated_file = generate_pdf_report(apps, report_path)
+                    config = load_config()
+                    generated_file = generate_pdf_report(apps, report_path, config=config)
                     if generated_file:
                         st.success("Report generated!")
                         with open(generated_file, "rb") as file:
@@ -215,21 +238,21 @@ def main():
     with col_a:
         st.subheader("Process Status")
         fig = px.pie(df, names='status', hole=0.4)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
     with col_b:
         st.subheader("Activity Timeline")
         df['date'] = pd.to_datetime(df['last_updated']).dt.date
         timeline = df.groupby('date').size().reset_index(name='count')
         fig2 = px.bar(timeline, x='date', y='count')
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, width='stretch')
 
     st.subheader("Application Pipeline")
     df['Applied Date'] = pd.to_datetime(df['applied_at']).dt.strftime('%Y-%m-%d')
     df['Last Email'] = pd.to_datetime(df['last_updated']).dt.strftime('%Y-%m-%d')
     
     st.dataframe(
-        df[['Applied Date', 'company_name', 'status', 'Last Email', 'email_subject']].sort_values(by='Last Email', ascending=False),
-        use_container_width=True,
+        df[['Applied Date', 'company_name', 'status', 'sender_name', 'sender_email', 'Last Email', 'email_subject', 'summary']].sort_values(by='Last Email', ascending=False),
+        width='stretch',
         hide_index=True,
         height=600
     )

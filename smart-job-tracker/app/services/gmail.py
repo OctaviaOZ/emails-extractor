@@ -55,6 +55,7 @@ def get_message_body(service: Resource, msg_id: str) -> dict:
         sender = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown')
         date = next((h['value'] for h in headers if h['name'] == 'Date'), '')
         snippet = message.get('snippet', '')
+        internal_date = message.get('internalDate', '')
 
         parts = message['payload'].get('parts', [])
         body_text = ""
@@ -94,6 +95,7 @@ def get_message_body(service: Resource, msg_id: str) -> dict:
             "subject": subject,
             "sender": sender,
             "date": date,
+            "internalDate": internal_date,
             "snippet": snippet,
             "text": body_text,
             "html": body_html

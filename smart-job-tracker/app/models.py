@@ -29,6 +29,10 @@ class JobApplication(SQLModel, table=True):
     position: Optional[str] = Field(default=None)
     status: ApplicationStatus = Field(default=ApplicationStatus.UNKNOWN)
     
+    # Sender details
+    sender_name: Optional[str] = None
+    sender_email: Optional[str] = None
+    
     # Dates
     applied_at: datetime = Field(default_factory=datetime.utcnow) # First email date
     last_updated: datetime = Field(default_factory=datetime.utcnow) # Latest email date
@@ -36,6 +40,7 @@ class JobApplication(SQLModel, table=True):
     # Latest email details
     email_subject: str
     email_snippet: Optional[str] = None
+    summary: Optional[str] = None # Short AI or heuristic summary
     
     # Metadata for reporting
     year: int

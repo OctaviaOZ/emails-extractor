@@ -60,6 +60,7 @@ class EmailExtractor:
         1. "company_name": The employer name.
         2. "position": The job title (if mentioned).
         3. "status": Must be one of: 'Applied', 'Communication', 'Interview', 'Assessment', 'Offer', 'Rejected'. Default to 'Communication'.
+        4. "summary": A very short (one sentence) summary of the current state.
         """
         
         completion = client.chat.completions.create(
@@ -81,7 +82,7 @@ class EmailExtractor:
             company_name=data.get("company_name", "Unknown"),
             position=data.get("position"),
             status=status,
-            summary=f"Extracted via AI: {status_str}"
+            summary=data.get("summary", f"State: {status_str}")
         )
 
     def _extract_with_gemini(self, subject: str, sender: str, text: str) -> ExtractedData:
@@ -99,7 +100,7 @@ class EmailExtractor:
         1. "company_name": The company name (NOT the platform like LinkedIn/Personio).
         2. "position": Job title.
         3. "status": One of: 'Applied', 'Communication', 'Interview', 'Assessment', 'Offer', 'Rejected'.
-        Choose 'Communication' for general updates or back-and-forth.
+        4. "summary": A very short (one sentence) summary of the message.
         """
         
         response = model.generate_content(
@@ -118,7 +119,7 @@ class EmailExtractor:
                 company_name=data.get("company_name", "Unknown"),
                 position=data.get("position"),
                 status=status,
-                summary=f"Extracted via Gemini: {status_str}"
+                summary=data.get("summary", f"Detected state: {status_str}")
             )
         except Exception as e:
             logger.error(f"Failed to parse Gemini response: {e}")
@@ -186,11 +187,19 @@ class EmailExtractor:
         elif any(w.lower() in lower_all for w in kw_cfg.get('applied', [])):
             status = ApplicationStatus.APPLIED
             
+        summary = f"Heuristic detected status: {status.value}"
+        if status == ApplicationStatus.REJECTED:
+            summary = "Application was rejected."
+        elif status == ApplicationStatus.INTERVIEW:
+            summary = "Invitation or discussion about interview."
+        elif status == ApplicationStatus.APPLIED:
+            summary = "Confirmation of application receipt."
+
         return ExtractedData(
             company_name=company,
             position=None,
             status=status,
-            summary="Heuristic extraction"
+            summary=summary
         )
 
     def _map_status(self, status_str: str) -> ApplicationStatus:
