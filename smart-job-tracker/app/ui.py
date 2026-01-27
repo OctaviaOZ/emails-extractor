@@ -6,8 +6,22 @@ import plotly.express as px
 import os
 import yaml
 import re
+import logging
 from dotenv import load_dotenv
 from dateutil import parser
+
+# --- Setup logging ---
+base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+log_file_path = os.path.join(base_dir, "persistent_sync.log")
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_file_path),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 from services.gmail import get_gmail_service, get_message_body
 from services.extractor import EmailExtractor
@@ -15,7 +29,6 @@ from services.report import generate_pdf_report
 from models import JobApplication, ApplicationStatus, ProcessedEmail, STATUS_RANK
 
 # --- Load Environment Variables ---
-base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(base_dir, ".env"))
 
 def load_config():
@@ -35,6 +48,7 @@ def create_db_and_tables(engine):
 # --- Sync Logic ---
 def sync_emails(engine):
     st.toast("Starting Sync...", icon="🔄")
+    logger.info("Sync started")
     
     config = load_config()
     start_date = config.get('start_date', '2025-01-01')
@@ -50,137 +64,168 @@ def sync_emails(engine):
         service = get_gmail_service(credentials_path=creds_path, token_path=token_path, scopes=scopes)
     except Exception as e:
         st.error(f"Authentication failed: {e}")
+        logger.error(f"Authentication failed: {e}")
         return
 
     query = f"label:{label_name} after:{gmail_date}"
     messages = []
     
     with st.spinner("Fetching message list..."):
-        request = service.users().messages().list(userId='me', q=query)
-        while request is not None:
-            response = request.execute()
-            messages.extend(response.get('messages', []))
-            request = service.users().messages().list_next(request, response)
+        try:
+            request = service.users().messages().list(userId='me', q=query)
+            while request is not None:
+                response = request.execute()
+                messages.extend(response.get('messages', []))
+                request = service.users().messages().list_next(request, response)
+        except Exception as e:
+            st.error(f"Failed to fetch messages: {e}")
+            logger.error(f"Failed to fetch messages: {e}")
+            return
     
     if not messages:
         st.info(f"No messages found.")
+        logger.info("No messages found.")
         return
     
     # Sort messages by internalDate ascending so we process the history in order
-    # (Simplified: Gmail returns newest first, so we reverse it)
     messages.reverse()
 
     extractor = EmailExtractor(config=config)
     new_emails_count = 0
+    errors_count = 0
     
-    with Session(engine) as session:
-        progress_bar = st.progress(0)
-        total_msgs = len(messages)
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    total_msgs = len(messages)
+    
+    skip_domains = config.get('skip_domains', [])
+    
+    logger.info(f"Processing {total_msgs} messages")
+    
+    for i, msg in enumerate(messages):
+        msg_id = msg['id']
         
-        skip_domains = config.get('skip_domains', [])
-        
-        for i, msg in enumerate(messages):
-            msg_id = msg['id']
-            
-            # Check if this specific email has been processed
-            processed = session.get(ProcessedEmail, msg_id)
-            if processed:
-                progress_bar.progress((i + 1) / total_msgs)
-                continue
-            
-            full_msg = get_message_body(service, msg_id)
-            if not full_msg: continue
-
-            # Skip restricted senders or domains
-            sender_full = full_msg.get('sender', '')
-            sender_name = ""
-            sender_email = sender_full
-            
-            if '<' in sender_full:
-                match = re.match(r'^(.*?)\s*<(.+)>', sender_full)
-                if match:
-                    sender_name, sender_email = match.groups()
-                    sender_name = sender_name.strip().replace('"', '')
-                    sender_email = sender_email.strip()
-
-            should_skip = False
-            if any(email.lower() in sender_email.lower() for email in skip_emails):
-                should_skip = True
-            elif any(domain.lower() in sender_email.lower() for domain in skip_domains):
-                should_skip = True
+        try:
+            with Session(engine) as session:
+                # Check if this specific email has been processed
+                processed = session.get(ProcessedEmail, msg_id)
+                if processed:
+                    progress_bar.progress((i + 1) / total_msgs)
+                    continue
                 
-            if should_skip:
-                session.add(ProcessedEmail(email_id=msg_id, company_name="Skipped"))
-                progress_bar.progress((i + 1) / total_msgs)
-                continue
+                logger.info(f"Processing message ID: {msg_id}")
+                full_msg = get_message_body(service, msg_id)
+                if not full_msg:
+                    logger.warning(f"Could not retrieve body for message {msg_id}")
+                    continue
 
-            # Parse Date - Use internalDate if available for precision
-            email_dt = datetime.now()
-            if full_msg.get('internalDate'):
-                try:
-                    email_dt = datetime.fromtimestamp(int(full_msg['internalDate']) / 1000.0)
-                except: pass
-            elif full_msg.get('date'):
-                try:
-                    email_dt = parser.parse(full_msg['date']).replace(tzinfo=None)
-                except: pass
-
-            # Extract Data
-            data = extractor.extract(full_msg['subject'], full_msg['sender'], full_msg['text'], full_msg['html'])
-            
-            company_name_variable = data.company_name
-            
-            if company_name_variable == "Unknown":
-                session.add(ProcessedEmail(email_id=msg_id, company_name="Unknown"))
-                progress_bar.progress((i + 1) / total_msgs)
-                continue
-
-            # Process Tracking Logic
-            app = session.exec(select(JobApplication).where(JobApplication.company_name == company_name_variable)).first()
-            
-            if not app:
-                # Create new process
-                app = JobApplication(
-                    company_name=company_name_variable,
-                    position=data.position,
-                    status=data.status,
-                    sender_name=sender_name,
-                    sender_email=sender_email,
-                    applied_at=email_dt,
-                    last_updated=email_dt,
-                    email_subject=full_msg['subject'],
-                    email_snippet=full_msg['snippet'],
-                    summary=data.summary,
-                    year=email_dt.year,
-                    month=email_dt.month,
-                    day=email_dt.day
-                )
-                session.add(app)
-            else:
-                # Update existing process status if the new status is "higher" in rank
-                current_rank = STATUS_RANK.get(app.status, 0)
-                new_rank = STATUS_RANK.get(data.status, 0)
+                # Skip restricted senders or domains
+                sender_full = full_msg.get('sender', '')
+                sender_name = ""
+                sender_email = sender_full
                 
-                if new_rank >= current_rank:
-                    app.status = data.status
-                
-                # Update last updated if this email is newer
-                if email_dt > app.last_updated:
-                    app.last_updated = email_dt
-                    app.sender_name = sender_name
-                    app.sender_email = sender_email
-                    app.email_subject = full_msg['subject']
-                    app.email_snippet = full_msg['snippet']
-                    app.summary = data.summary
+                if '<' in sender_full:
+                    match = re.match(r'^(.*?)\s*<(.+)>', sender_full)
+                    if match:
+                        sender_name, sender_email = match.groups()
+                        sender_name = sender_name.strip().replace('"', '')
+                        sender_email = sender_email.strip()
 
-            # Mark email as processed
-            session.add(ProcessedEmail(email_id=msg_id, company_name=company_name_variable))
-            new_emails_count += 1
+                should_skip = False
+                if any(email.lower() in sender_email.lower() for email in skip_emails):
+                    should_skip = True
+                elif any(domain.lower() in sender_email.lower() for domain in skip_domains):
+                    should_skip = True
+                    
+                if should_skip:
+                    session.add(ProcessedEmail(email_id=msg_id, company_name="Skipped"))
+                    session.commit()
+                    progress_bar.progress((i + 1) / total_msgs)
+                    logger.info(f"Skipped {sender_email}")
+                    continue
+
+                # Parse Date - Use internalDate if available for precision
+                email_dt = datetime.now()
+                if full_msg.get('internalDate'):
+                    try:
+                        email_dt = datetime.fromtimestamp(int(full_msg['internalDate']) / 1000.0)
+                    except: pass
+                elif full_msg.get('date'):
+                    try:
+                        email_dt = parser.parse(full_msg['date']).replace(tzinfo=None)
+                    except: pass
+
+                # Extract Data
+                data = extractor.extract(full_msg['subject'], full_msg['sender'], full_msg['text'], full_msg['html'])
+                
+                company_name_variable = data.company_name
+                
+                if company_name_variable == "Unknown":
+                    session.add(ProcessedEmail(email_id=msg_id, company_name="Unknown"))
+                    session.commit()
+                    progress_bar.progress((i + 1) / total_msgs)
+                    logger.info(f"Unknown company for message {msg_id}")
+                    continue
+
+                # Process Tracking Logic
+                app = session.exec(select(JobApplication).where(JobApplication.company_name == company_name_variable)).first()
+                
+                if not app:
+                    # Create new process
+                    app = JobApplication(
+                        company_name=company_name_variable,
+                        position=data.position,
+                        status=data.status,
+                        sender_name=sender_name,
+                        sender_email=sender_email,
+                        applied_at=email_dt,
+                        last_updated=email_dt,
+                        email_subject=full_msg['subject'],
+                        email_snippet=full_msg['snippet'],
+                        summary=data.summary,
+                        year=email_dt.year,
+                        month=email_dt.month,
+                        day=email_dt.day
+                    )
+                    session.add(app)
+                else:
+                    # Update existing process status if the new status is "higher" in rank
+                    current_rank = STATUS_RANK.get(app.status, 0)
+                    new_rank = STATUS_RANK.get(data.status, 0)
+                    
+                    if new_rank >= current_rank:
+                        app.status = data.status
+                    
+                    # Update last updated if this email is newer
+                    if email_dt > app.last_updated:
+                        app.last_updated = email_dt
+                        app.sender_name = sender_name
+                        app.sender_email = sender_email
+                        app.email_subject = full_msg['subject']
+                        app.email_snippet = full_msg['snippet']
+                        app.summary = data.summary
+
+                # Mark email as processed
+                session.add(ProcessedEmail(email_id=msg_id, company_name=company_name_variable))
+                session.commit()
+                new_emails_count += 1
+                
+                status_text.text(f"Processing: {company_name_variable}...")
+                progress_bar.progress((i + 1) / total_msgs)
+                logger.info(f"Successfully processed {company_name_variable}")
+                
+        except Exception as e:
+            logger.error(f"Error processing message {msg_id}: {e}", exc_info=True)
+            errors_count += 1
             progress_bar.progress((i + 1) / total_msgs)
-        
-        session.commit()
+            continue
     
-    st.success(f"Sync complete. Processed {new_emails_count} new emails.")
+    status_text.empty()
+    if errors_count > 0:
+        st.warning(f"Sync complete with {errors_count} errors. Processed {new_emails_count} new emails.")
+    else:
+        st.success(f"Sync complete. Processed {new_emails_count} new emails.")
+    logger.info(f"Sync complete. {new_emails_count} new, {errors_count} errors.")
 
 def main():
     st.set_page_config(page_title="Job Tracker", page_icon="💼", layout="wide")
@@ -188,7 +233,7 @@ def main():
     
     # Database Initialization
     db_url = os.environ.get("DATABASE_URL", "postgresql:///job_tracker")
-    engine = create_engine(db_url)
+    engine = create_engine(db_url, pool_pre_ping=True)
     create_db_and_tables(engine)
 
     with st.sidebar:

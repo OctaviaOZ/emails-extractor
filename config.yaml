@@ -2,7 +2,7 @@
 
 # Gmail API settings
 label_name: 'apply'
-start_date: '2025-05-01'  # Format: YYYY-MM-DD
+start_date: '2025-09-17'  # Format: YYYY-MM-DD
 scopes:
   - 'https://www.googleapis.com/auth/gmail.readonly'
 
@@ -109,6 +109,9 @@ status_keywords:
     - 'other candidates'
     - 'not continuing'
     - 'Absage'
+    - 'nicht berücksichtigen'
+    - 'anderweitig entschieden'
+    - 'abgeschlossen'
   interview:
     - 'interview'
     - 'schedule a call'
@@ -116,23 +119,36 @@ status_keywords:
     - 'phone screen'
     - 'zoom'
     - 'Vorstellungsgespräch'
+    - 'Kennenlernen'
+    - 'Gespräch einladen'
+    - 'Terminvorschlag'
   offer:
     - 'offer'
     - 'congratulations'
     - 'pleased to offer'
     - 'Vertragsangebot'
+    - 'Vertragsentwurf'
+    - 'Angebot'
   assessment:
     - 'assessment'
     - 'coding challenge'
     - 'take-home'
     - 'test'
     - 'Aufgabe'
+    - 'Eignungstest'
+    - 'HackerRank'
+    - 'Codility'
   applied:
     - 'applied'
     - 'confirming'
     - 'application received'
     - 'successfully submitted'
     - 'Eingangsbestätigung'
+    - 'Vielen Dank für Ihre Bewerbung'
+    - 'Vielen Dank für Deine Bewerbung'
+    - 'Bewerbung eingegangen'
+    - 'Eingang Ihrer Bewerbung'
+    - 'Interesse an'
 
 # Report settings
 report_mapping:

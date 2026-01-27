@@ -6,6 +6,7 @@ from typing import Optional
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
 from models import ApplicationStatus
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 logger = logging.getLogger(__name__)
 
@@ -24,24 +25,42 @@ class EmailExtractor:
         # Handle empty strings from .env
         if not self.openai_key: self.openai_key = None
         if not self.gemini_key: self.gemini_key = None
+        
+        # Session-level flags to skip AI if quota is hit
+        self.skip_openai = False
+        self.skip_gemini = False
 
     def extract(self, subject: str, sender: str, body_text: str, body_html: str) -> ExtractedData:
-        # Priority 1: LLM Extraction (most accurate)
-        if self.openai_key:
+        # Priority 1: OpenAI (if not skipped)
+        if self.openai_key and not self.skip_openai:
             try:
                 return self._extract_with_openai(subject, sender, body_text)
             except Exception as e:
-                logger.warning(f"OpenAI extraction failed: {e}. Falling back to heuristic.")
+                if "insufficient_quota" in str(e) or "429" in str(e):
+                    logger.warning("OpenAI quota hit. Switching to fallback for this session.")
+                    self.skip_openai = True
+                else:
+                    logger.warning(f"OpenAI extraction failed: {e}. Falling back.")
         
-        if self.gemini_key:
+        # Priority 2: Gemini (if not skipped)
+        if self.gemini_key and not self.skip_gemini:
              try:
                 return self._extract_with_gemini(subject, sender, body_text)
              except Exception as e:
-                logger.warning(f"Gemini extraction failed: {e}. Falling back to heuristic.")
+                if "429" in str(e):
+                    logger.warning("Gemini quota hit. Switching to fallback for this session.")
+                    self.skip_gemini = True
+                else:
+                    logger.warning(f"Gemini extraction failed: {e}. Falling back.")
 
-        # Priority 2: Heuristic Extraction (Fast, Free, less accurate)
+        # Priority 3: Heuristic Extraction (Fast, Free)
         return self._extract_heuristic(subject, sender, body_text, body_html)
 
+    @retry(
+        stop=stop_after_attempt(2),
+        wait=wait_exponential(multiplier=1, min=2, max=5),
+        reraise=True
+    )
     def _extract_with_openai(self, subject: str, sender: str, text: str) -> ExtractedData:
         from openai import OpenAI
         client = OpenAI(api_key=self.openai_key)
@@ -54,12 +73,11 @@ class EmailExtractor:
         
         IMPORTANT: Extract the ACTUAL EMPLOYER (the company applied to).
         - IGNORE platform names (Workday, LinkedIn, SmartRecruiters, Greenhouse, Lever, Personio, etc.).
-        - Check the Subject and Body carefully for the employer.
         
         Extract:
         1. "company_name": The employer name.
         2. "position": The job title (if mentioned).
-        3. "status": Must be one of: 'Applied', 'Communication', 'Interview', 'Assessment', 'Offer', 'Rejected'. Default to 'Communication'.
+        3. "status": One of: 'Applied', 'Communication', 'Interview', 'Assessment', 'Offer', 'Rejected'.
         4. "summary": A very short (one sentence) summary of the current state.
         """
         
@@ -82,9 +100,14 @@ class EmailExtractor:
             company_name=data.get("company_name", "Unknown"),
             position=data.get("position"),
             status=status,
-            summary=data.get("summary", f"State: {status_str}")
+            summary=data.get("summary", f"AI Summary: {status_str}")
         )
 
+    @retry(
+        stop=stop_after_attempt(2),
+        wait=wait_exponential(multiplier=1, min=2, max=5),
+        reraise=True
+    )
     def _extract_with_gemini(self, subject: str, sender: str, text: str) -> ExtractedData:
         import google.generativeai as genai
         genai.configure(api_key=self.gemini_key)
@@ -100,7 +123,7 @@ class EmailExtractor:
         1. "company_name": The company name (NOT the platform like LinkedIn/Personio).
         2. "position": Job title.
         3. "status": One of: 'Applied', 'Communication', 'Interview', 'Assessment', 'Offer', 'Rejected'.
-        4. "summary": A very short (one sentence) summary of the message.
+        4. "summary": A very short summary of the message.
         """
         
         response = model.generate_content(
@@ -110,20 +133,16 @@ class EmailExtractor:
             ),
         )
         
-        try:
-            data = json.loads(response.text)
-            status_str = data.get("status", "Unknown")
-            status = self._map_status(status_str)
+        data = json.loads(response.text)
+        status_str = data.get("status", "Unknown")
+        status = self._map_status(status_str)
 
-            return ExtractedData(
-                company_name=data.get("company_name", "Unknown"),
-                position=data.get("position"),
-                status=status,
-                summary=data.get("summary", f"Detected state: {status_str}")
-            )
-        except Exception as e:
-            logger.error(f"Failed to parse Gemini response: {e}")
-            raise e
+        return ExtractedData(
+            company_name=data.get("company_name", "Unknown"),
+            position=data.get("position"),
+            status=status,
+            summary=data.get("summary", f"AI Summary (G): {status_str}")
+        )
 
     def _extract_heuristic(self, subject: str, sender: str, text: str, html: str) -> ExtractedData:
         extraction_cfg = self.config.get('extraction', {})
@@ -152,10 +171,20 @@ class EmailExtractor:
                 else:
                     company = potential.capitalize()
 
+        # Better company detection from sender name
         if (is_platform or company == "Unknown") and sender_name:
-            clean_name = re.sub(r'(?i)\s+(hiring|team|recruiting|careers|jobs|notifications|via).*', '', sender_name).strip()
+            clean_name = re.sub(r'(?i)\s+(hiring|team|recruiting|careers|jobs|notifications|via|bewerbermanagement|career).*', '', sender_name).strip()
             if clean_name and clean_name.lower() not in generic_names and len(clean_name) > 2:
                 company = clean_name
+
+        # Better company detection from Body Signatures
+        if company == "Unknown" and text:
+            # Look for common German closing patterns
+            closing_match = re.search(r'(?i)(Mit freundlichen Grüßen|Herzliche Grüße|Best regards|Viele Grüße|Greetings)\s*(?:[\r\n]+.*?){1,2}[\r\n]+(.*?)(?:[\r\n]|$)', text[-1000:])
+            if closing_match:
+                potential_company = closing_match.group(2).strip()
+                if potential_company and len(potential_company) > 2 and len(potential_company) < 50:
+                    company = potential_company
 
         if company == "Unknown":
             subject_patterns = extraction_cfg.get('subject_patterns', [])
@@ -171,29 +200,31 @@ class EmailExtractor:
                     break
 
         # Status Detection
-        lower_all = (subject + " " + text).lower()
-        status = ApplicationStatus.COMMUNICATION # Default to communication for non-unknown
-        
+        search_text = (subject + " " + text).lower()
+        status = ApplicationStatus.COMMUNICATION
         kw_cfg = self.config.get('status_keywords', {})
         
-        if any(w.lower() in lower_all for w in kw_cfg.get('rejected', [])):
+        if any(w.lower() in search_text for w in kw_cfg.get('rejected', [])):
             status = ApplicationStatus.REJECTED
-        elif any(w.lower() in lower_all for w in kw_cfg.get('interview', [])):
-            status = ApplicationStatus.INTERVIEW
-        elif any(w.lower() in lower_all for w in kw_cfg.get('offer', [])):
+        elif any(w.lower() in search_text for w in kw_cfg.get('offer', [])):
             status = ApplicationStatus.OFFER
-        elif any(w.lower() in lower_all for w in kw_cfg.get('assessment', [])):
+        elif any(w.lower() in search_text for w in kw_cfg.get('interview', [])):
+            status = ApplicationStatus.INTERVIEW
+        elif any(w.lower() in search_text for w in kw_cfg.get('assessment', [])):
             status = ApplicationStatus.ASSESSMENT
-        elif any(w.lower() in lower_all for w in kw_cfg.get('applied', [])):
+        elif any(w.lower() in search_text for w in kw_cfg.get('applied', [])):
             status = ApplicationStatus.APPLIED
             
-        summary = f"Heuristic detected status: {status.value}"
-        if status == ApplicationStatus.REJECTED:
-            summary = "Application was rejected."
-        elif status == ApplicationStatus.INTERVIEW:
-            summary = "Invitation or discussion about interview."
-        elif status == ApplicationStatus.APPLIED:
-            summary = "Confirmation of application receipt."
+        clean_subject = subject.replace("Re:", "").replace("Aw:", "").strip()
+        summary_map = {
+            ApplicationStatus.APPLIED: f"Application confirmed: {clean_subject}",
+            ApplicationStatus.REJECTED: f"Application rejected or closed: {clean_subject}",
+            ApplicationStatus.INTERVIEW: f"Interview/Meeting related: {clean_subject}",
+            ApplicationStatus.OFFER: f"Job offer received: {clean_subject}",
+            ApplicationStatus.ASSESSMENT: f"Assessment/Test task: {clean_subject}",
+            ApplicationStatus.COMMUNICATION: f"General update: {clean_subject}"
+        }
+        summary = summary_map.get(status, f"Interaction: {clean_subject}")
 
         return ExtractedData(
             company_name=company,
@@ -208,7 +239,6 @@ class EmailExtractor:
         except ValueError:
             s = status_str.lower()
             kw_cfg = self.config.get('status_keywords', {})
-            
             if any(w.lower() in s for w in kw_cfg.get('rejected', [])): return ApplicationStatus.REJECTED
             if any(w.lower() in s for w in kw_cfg.get('interview', [])): return ApplicationStatus.INTERVIEW
             if any(w.lower() in s for w in kw_cfg.get('offer', [])): return ApplicationStatus.OFFER
