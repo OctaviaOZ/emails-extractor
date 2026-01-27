@@ -16,8 +16,6 @@ token.pickle
 
 reports/
 
-*.yaml
-
 SENIOR_ENGINEER_GUIDE.md
 
 start_app.sh

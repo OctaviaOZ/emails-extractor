@@ -39,13 +39,14 @@ def sync_emails(engine):
     start_date = config.get('start_date', '2025-01-01')
     label_name = config.get('label_name', 'apply')
     skip_emails = config.get('skip_emails', [])
+    scopes = config.get('scopes', [])
     
     gmail_date = start_date.replace('-', '/')
     creds_path = os.path.join(base_dir, "credentials.json")
     token_path = os.path.join(base_dir, "token.pickle")
     
     try:
-        service = get_gmail_service(credentials_path=creds_path, token_path=token_path)
+        service = get_gmail_service(credentials_path=creds_path, token_path=token_path, scopes=scopes)
     except Exception as e:
         st.error(f"Authentication failed: {e}")
         return
@@ -68,12 +69,14 @@ def sync_emails(engine):
     # (Simplified: Gmail returns newest first, so we reverse it)
     messages.reverse()
 
-    extractor = EmailExtractor()
+    extractor = EmailExtractor(config=config)
     new_emails_count = 0
     
     with Session(engine) as session:
         progress_bar = st.progress(0)
         total_msgs = len(messages)
+        
+        skip_domains = config.get('skip_domains', [])
         
         for i, msg in enumerate(messages):
             msg_id = msg['id']
@@ -87,9 +90,16 @@ def sync_emails(engine):
             full_msg = get_message_body(service, msg_id)
             if not full_msg: continue
 
-            # Skip restricted senders
+            # Skip restricted senders or domains
             sender_email = full_msg.get('sender', '').lower()
+            
+            should_skip = False
             if any(email.lower() in sender_email for email in skip_emails):
+                should_skip = True
+            elif any(domain.lower() in sender_email for domain in skip_domains):
+                should_skip = True
+                
+            if should_skip:
                 session.add(ProcessedEmail(email_id=msg_id, company_name="Skipped"))
                 progress_bar.progress((i + 1) / total_msgs)
                 continue

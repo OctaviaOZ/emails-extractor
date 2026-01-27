@@ -7,7 +7,10 @@ from datetime import datetime
 import os
 from models import ApplicationStatus
 
-def map_status_to_german(status):
+def map_status_to_german(status, mapping=None):
+    if mapping and status.value in mapping:
+        return mapping[status.value]
+    
     if status == ApplicationStatus.APPLIED:
         return "Beworben"
     elif status == ApplicationStatus.REJECTED:
@@ -19,7 +22,7 @@ def map_status_to_german(status):
     else:
         return str(status)
 
-def generate_pdf_report(applications, output_filename):
+def generate_pdf_report(applications, output_filename, config=None):
     """
     Generates a PDF report from a list of JobApplication objects.
     """
@@ -41,6 +44,8 @@ def generate_pdf_report(applications, output_filename):
 
     report_data = []
     
+    mapping = config.get('report_mapping') if config else None
+
     # Group by company to aggregate data
     for company, group in df.groupby('company_name'):
         # Latest entry (first in sorted group) determines the current status and last contact
@@ -50,7 +55,7 @@ def generate_pdf_report(applications, output_filename):
         # Count number of emails where status was specifically INTERVIEW
         interview_count = group[group['status'] == ApplicationStatus.INTERVIEW].shape[0]
         
-        german_status = map_status_to_german(latest['status'])
+        german_status = map_status_to_german(latest['status'], mapping)
         
         report_data.append({
             "Firma": company,

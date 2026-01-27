@@ -16,7 +16,8 @@ class ExtractedData(BaseModel):
     summary: str
 
 class EmailExtractor:
-    def __init__(self, openai_api_key: Optional[str] = None, gemini_api_key: Optional[str] = None):
+    def __init__(self, config: Optional[dict] = None, openai_api_key: Optional[str] = None, gemini_api_key: Optional[str] = None):
+        self.config = config or {}
         self.openai_key = openai_api_key or os.getenv("OPENAI_API_KEY")
         self.gemini_key = gemini_api_key or os.getenv("GOOGLE_API_KEY")
         
@@ -124,21 +125,9 @@ class EmailExtractor:
             raise e
 
     def _extract_heuristic(self, subject: str, sender: str, text: str, html: str) -> ExtractedData:
-        platforms = [
-            'myworkday', 'workday', 'smartrecruiters', 'linkedin', 'indeed', 
-            'greenhouse', 'lever', 'ashby', 'recruitee', 'bamboohr', 'jobvite', 
-            'icims', 'taleo', 'successfactors', 'join.com', 'teamtailor', 'personio',
-            'workable'
-        ]
-        
-        generic_names = {
-            'noreply', 'no-reply', 'donotreply', 'mailer', 'mailer-daemon',
-            'candidates', 'candidate', 'careers', 'jobs', 'hiring', 'hire', 'team', 'work', 'talent',
-            'recruiting', 'recruit', 'application', 'applications', 'apply',
-            'notification', 'notifications', 'alert', 'alerts', 'update', 'updates',
-            'info', 'contact', 'support', 'hello', 'welcome', 'service',
-            'system', 'mail', 'email', 'inbox', 'post', 'office', 'admin', 'hr'
-        }
+        extraction_cfg = self.config.get('extraction', {})
+        platforms = extraction_cfg.get('platforms', [])
+        generic_names = set(extraction_cfg.get('generic_names', []))
         
         company = "Unknown"
         sender_name = ""
@@ -168,19 +157,11 @@ class EmailExtractor:
                 company = clean_name
 
         if company == "Unknown":
-            subject_patterns = [
-                (r"(?i) at (.*)", 1),
-                (r"(?i) regarding (.*)", 1),
-                (r"(?i)Welcome to (.*)", 1),
-                (r"(?i)applying to (.*)", 1),
-                (r"(?i)Application to (.*)", 1),
-                (r"(?i)interest in (.*)", 1),
-                (r"(?i)sent to (.*)", 1),
-                (r"(?i) bei der (.*)", 1),
-                (r"(?i) bei (.*)", 1),
-                (r"(?i)Bewerbung auf (.*)", 1),
-            ]
-            for pat, group in subject_patterns:
+            subject_patterns = extraction_cfg.get('subject_patterns', [])
+            for entry in subject_patterns:
+                pat = entry.get('pattern')
+                group = entry.get('group', 1)
+                if not pat: continue
                 m = re.search(pat, subject)
                 if m:
                     candidate = m.group(group).strip()
@@ -192,15 +173,17 @@ class EmailExtractor:
         lower_all = (subject + " " + text).lower()
         status = ApplicationStatus.COMMUNICATION # Default to communication for non-unknown
         
-        if any(w in lower_all for w in ['reject', 'unfortunately', 'not moving forward', 'not be proceeding', 'other candidates', 'not continuing']):
+        kw_cfg = self.config.get('status_keywords', {})
+        
+        if any(w.lower() in lower_all for w in kw_cfg.get('rejected', [])):
             status = ApplicationStatus.REJECTED
-        elif any(w in lower_all for w in ['interview', 'schedule a call', 'availability', 'phone screen', 'zoom']):
+        elif any(w.lower() in lower_all for w in kw_cfg.get('interview', [])):
             status = ApplicationStatus.INTERVIEW
-        elif any(w in lower_all for w in ['offer', 'congratulations', 'pleased to offer']):
+        elif any(w.lower() in lower_all for w in kw_cfg.get('offer', [])):
             status = ApplicationStatus.OFFER
-        elif any(w in lower_all for w in ['assessment', 'coding challenge', 'take-home', 'test']):
+        elif any(w.lower() in lower_all for w in kw_cfg.get('assessment', [])):
             status = ApplicationStatus.ASSESSMENT
-        elif any(w in lower_all for w in ['applied', 'confirming', 'application received', 'successfully submitted']):
+        elif any(w.lower() in lower_all for w in kw_cfg.get('applied', [])):
             status = ApplicationStatus.APPLIED
             
         return ExtractedData(
@@ -215,9 +198,11 @@ class EmailExtractor:
             return ApplicationStatus(status_str)
         except ValueError:
             s = status_str.lower()
-            if 'reject' in s: return ApplicationStatus.REJECTED
-            if 'interview' in s: return ApplicationStatus.INTERVIEW
-            if 'offer' in s: return ApplicationStatus.OFFER
-            if 'apply' in s or 'applied' in s: return ApplicationStatus.APPLIED
-            if 'assess' in s: return ApplicationStatus.ASSESSMENT
+            kw_cfg = self.config.get('status_keywords', {})
+            
+            if any(w.lower() in s for w in kw_cfg.get('rejected', [])): return ApplicationStatus.REJECTED
+            if any(w.lower() in s for w in kw_cfg.get('interview', [])): return ApplicationStatus.INTERVIEW
+            if any(w.lower() in s for w in kw_cfg.get('offer', [])): return ApplicationStatus.OFFER
+            if any(w.lower() in s for w in kw_cfg.get('applied', [])): return ApplicationStatus.APPLIED
+            if any(w.lower() in s for w in kw_cfg.get('assessment', [])): return ApplicationStatus.ASSESSMENT
             return ApplicationStatus.COMMUNICATION

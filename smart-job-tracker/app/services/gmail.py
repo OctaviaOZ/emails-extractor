@@ -8,14 +8,14 @@ from googleapiclient.discovery import build, Resource
 
 logger = logging.getLogger(__name__)
 
-# If modifying these scopes, delete the file token.pickle.
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
-def get_gmail_service(credentials_path: str = 'credentials.json', token_path: str = 'token.pickle') -> Resource:
+def get_gmail_service(credentials_path: str = 'credentials.json', token_path: str = 'token.pickle', scopes: list = None) -> Resource:
     """Shows basic usage of the Gmail API.
     Lists the user's Gmail labels.
     """
     creds = None
+    use_scopes = scopes if scopes else SCOPES
     # The file token.pickle stores the user's access and refresh tokens, and is
     # created automatically when the authorization flow completes for the first
     # time.

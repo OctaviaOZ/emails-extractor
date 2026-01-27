@@ -1,0 +1,145 @@
+# Smart Job Tracker Configuration
+
+# Gmail API settings
+label_name: 'apply'
+start_date: '2025-05-01'  # Format: YYYY-MM-DD
+scopes:
+  - 'https://www.googleapis.com/auth/gmail.readonly'
+
+# Message filtering
+skip_emails: []
+skip_domains:
+  - 'gmail.com'
+  - 'jobagent.stepstone.de'
+  - 'indeed.com'
+  - 'linkedin.com'
+
+# Extraction Heuristics
+extraction:
+  platforms:
+    - 'myworkday'
+    - 'workday'
+    - 'smartrecruiters'
+    - 'linkedin'
+    - 'indeed'
+    - 'greenhouse'
+    - 'lever'
+    - 'ashby'
+    - 'recruitee'
+    - 'bamboohr'
+    - 'jobvite'
+    - 'icims'
+    - 'taleo'
+    - 'successfactors'
+    - 'join.com'
+    - 'teamtailor'
+    - 'personio'
+    - 'workable'
+  
+  generic_names:
+    - 'noreply'
+    - 'no-reply'
+    - 'donotreply'
+    - 'mailer'
+    - 'mailer-daemon'
+    - 'candidates'
+    - 'candidate'
+    - 'careers'
+    - 'jobs'
+    - 'hiring'
+    - 'hire'
+    - 'team'
+    - 'work'
+    - 'talent'
+    - 'recruiting'
+    - 'recruit'
+    - 'application'
+    - 'applications'
+    - 'apply'
+    - 'notification'
+    - 'notifications'
+    - 'alert'
+    - 'alerts'
+    - 'update'
+    - 'updates'
+    - 'info'
+    - 'contact'
+    - 'support'
+    - 'hello'
+    - 'welcome'
+    - 'service'
+    - 'system'
+    - 'mail'
+    - 'email'
+    - 'inbox'
+    - 'post'
+    - 'office'
+    - 'admin'
+    - 'hr'
+
+  subject_patterns:
+    - pattern: "(?i) at (.*)"
+      group: 1
+    - pattern: "(?i) regarding (.*)"
+      group: 1
+    - pattern: "(?i)Welcome to (.*)"
+      group: 1
+    - pattern: "(?i)applying to (.*)"
+      group: 1
+    - pattern: "(?i)Application to (.*)"
+      group: 1
+    - pattern: "(?i)interest in (.*)"
+      group: 1
+    - pattern: "(?i)sent to (.*)"
+      group: 1
+    - pattern: "(?i) bei der (.*)"
+      group: 1
+    - pattern: "(?i) bei (.*)"
+      group: 1
+    - pattern: "(?i)Bewerbung auf (.*)"
+      group: 1
+
+# Status Detection Keywords
+status_keywords:
+  rejected:
+    - 'reject'
+    - 'unfortunately'
+    - 'not moving forward'
+    - 'not be proceeding'
+    - 'other candidates'
+    - 'not continuing'
+    - 'Absage'
+  interview:
+    - 'interview'
+    - 'schedule a call'
+    - 'availability'
+    - 'phone screen'
+    - 'zoom'
+    - 'Vorstellungsgespräch'
+  offer:
+    - 'offer'
+    - 'congratulations'
+    - 'pleased to offer'
+    - 'Vertragsangebot'
+  assessment:
+    - 'assessment'
+    - 'coding challenge'
+    - 'take-home'
+    - 'test'
+    - 'Aufgabe'
+  applied:
+    - 'applied'
+    - 'confirming'
+    - 'application received'
+    - 'successfully submitted'
+    - 'Eingangsbestätigung'
+
+# Report settings
+report_mapping:
+  Applied: "Beworben"
+  Rejected: "Absage"
+  Interview: "Vorstellungsgespräch"
+  Assessment: "Eignungstest"
+  Offer: "Vertragsangebot"
+  Unknown: "Unbekannt"
+  Communication: "Kommunikation"
