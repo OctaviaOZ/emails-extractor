@@ -1,0 +1,33 @@
+[tool.poetry]
+name = "smart-job-tracker"
+version = "0.1.0"
+description = "Modern AI-powered job application tracker using Gmail."
+authors = ["Octavia <octavia@example.com>"]
+packages = [{include = "app"}]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+google-api-python-client = "^2.150.0"
+google-auth-httplib2 = "^0.2.0"
+google-auth-oauthlib = "^1.2.0"
+beautifulsoup4 = "^4.12.3"
+sqlmodel = "^0.0.22"
+pydantic = "^2.7.0"
+streamlit = "^1.35.0"
+openai = "^1.30.0"
+google-generativeai = "^0.7.0"
+python-dateutil = "^2.9.0"
+pandas = "^2.2.2"
+plotly = "^5.22.0"
+python-dotenv = "^1.0.1"
+psycopg2-binary = "^2.9.11"
+alembic = "^1.18.1"
+pyyaml = "^6.0.3"
+reportlab = "^4.4.9"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^9.0.2"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

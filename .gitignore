@@ -1,0 +1,28 @@
+.venv/
+
+# IDE
+.idea/
+.vscode/
+
+# Logs
+*.log
+logs/
+log/
+
+# creds
+credentials.json
+token.pickle
+*.csv
+
+reports/
+
+*.yaml
+
+SENIOR_ENGINEER_GUIDE.md
+
+start_app.sh
+
+.env
+
+.pytest_cache/
+__pycache__/
