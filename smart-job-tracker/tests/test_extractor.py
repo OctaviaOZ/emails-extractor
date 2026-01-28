@@ -61,5 +61,8 @@ def test_all_providers_fail():
     # No keys set, so no providers
     extractor = EmailExtractor() 
     
-    with pytest.raises(Exception, match="All AI providers failed"):
-        extractor.extract("Subject", "sender", "Body")
+    # It should fall back to heuristic, not raise
+    result = extractor.extract("Application for Software Engineer received", "hr@example.com", "Body")
+    
+    assert isinstance(result, ApplicationData)
+    assert result.status == ApplicationStatus.COMMUNICATION # Heuristic default
