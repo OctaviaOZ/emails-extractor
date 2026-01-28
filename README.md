@@ -23,7 +23,7 @@ A modern, AI-powered dashboard to track your job applications using data from Gm
 
 3. **Run:**
    ```bash
-   poetry run streamlit run app/ui.py --browser.gatherUsageStats false
+   poetry run streamlit run app/ui.py
    ```
 
 ## Configuration
