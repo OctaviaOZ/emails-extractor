@@ -7,20 +7,21 @@ from datetime import datetime
 import os
 from models import ApplicationStatus
 
-def map_status_to_german(status, mapping=None):
-    if mapping and status.value in mapping:
-        return mapping[status.value]
-    
-    if status == ApplicationStatus.APPLIED:
-        return "Beworben"
-    elif status == ApplicationStatus.REJECTED:
-        return "Absage"
-    elif status in [ApplicationStatus.INTERVIEW, ApplicationStatus.ASSESSMENT, ApplicationStatus.OFFER]:
-        return "im Prozess"
-    elif status == ApplicationStatus.UNKNOWN:
-        return "Unbekannt"
-    else:
-        return str(status)
+def get_status_label(status, mapping=None):
+    """
+    Returns the localized label for a status using the provided mapping.
+    Defaults to the English enum value if no mapping is found.
+    """
+    if mapping:
+        # Check for direct match (e.g., 'Applied')
+        if status.value in mapping:
+            return mapping[status.value]
+        # Check for match by key (e.g., if mapping uses 'Applied' as key)
+        if status in mapping:
+            return mapping[status]
+            
+    # Default Fallback (English / Raw Value)
+    return status.value
 
 def generate_pdf_report(applications, output_filename, config=None):
     """
@@ -44,24 +45,27 @@ def generate_pdf_report(applications, output_filename, config=None):
 
     report_data = []
     
-    mapping = config.get('report_mapping') if config else None
+    mapping = config.get('report_mapping', {}) if config else {}
 
     # Group by company to aggregate data
+    # Note: With multi-process support, a company might appear multiple times.
+    # This report aggregates by company, showing the latest status.
     for company, group in df.groupby('company_name'):
         # Latest entry (first in sorted group) determines the current status and last contact
         latest = group.iloc[0]
         
         # Calculate Interview Count
-        # Count number of emails where status was specifically INTERVIEW
+        # Count number of applications where status is specifically INTERVIEW
+        # Note: This is a simplified metric. Ideally we would query ApplicationEvent.
         interview_count = group[group['status'] == ApplicationStatus.INTERVIEW].shape[0]
         
-        german_status = map_status_to_german(latest['status'], mapping)
+        status_label = get_status_label(latest['status'], mapping)
         
         report_data.append({
-            "Firma": company,
-            "Status": german_status,
-            "Interview": interview_count,
-            "Letzter Kontakt": latest['last_updated'].strftime('%d.%m.%Y'),
+            "Company": company,
+            "Status": status_label,
+            "Interviews": interview_count,
+            "Last Contact": latest['last_updated'].strftime('%d.%m.%Y'),
             "_sort_date": latest['last_updated'] # Helper for sorting
         })
 
@@ -76,20 +80,22 @@ def generate_pdf_report(applications, output_filename, config=None):
     elements = []
     
     styles = getSampleStyleSheet()
-    title = Paragraph(f"Bewerbungs-Statistik - {datetime.now().strftime('%d.%m.%Y')}", styles['Title'])
+    title = Paragraph(f"Application Report - {datetime.now().strftime('%Y-%m-%d')}", styles['Title'])
     elements.append(title)
     elements.append(Spacer(1, 12))
 
     # Table Data
-    # Headers
-    table_data = [['Firma', 'Status', 'Interview', 'Letzter Kontakt']]
+    # Headers - customizable via config could be an enhancement, hardcoded English for now
+    headers = ['Company', 'Status', 'Interviews', 'Last Contact']
+    table_data = [headers]
+    
     # Rows
     for _, row in report_df.iterrows():
         table_data.append([
-            row['Firma'], 
+            row['Company'], 
             row['Status'], 
-            str(row['Interview']), 
-            row['Letzter Kontakt']
+            str(row['Interviews']), 
+            row['Last Contact']
         ])
 
     # Table Style

@@ -24,9 +24,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from services.gmail import get_gmail_service, get_message_body
-from services.extractor import EmailExtractor
+from services.extractor import EmailExtractor, ApplicationData
+from services.processor import ApplicationProcessor
 from services.report import generate_pdf_report
-from models import JobApplication, ApplicationStatus, ProcessedEmail, STATUS_RANK
+from models import JobApplication, ApplicationStatus, ProcessedEmail, ApplicationEvent
 
 # --- Load Environment Variables ---
 load_dotenv(os.path.join(base_dir, ".env"))
@@ -158,61 +159,35 @@ def sync_emails(engine):
                 # Extract Data
                 data = extractor.extract(full_msg['subject'], full_msg['sender'], full_msg['text'], full_msg['html'])
                 
-                company_name_variable = data.company_name
-                
-                if company_name_variable == "Unknown":
+                # Check if data is valid ApplicationData object
+                if not data or data.company_name == "Unknown":
                     session.add(ProcessedEmail(email_id=msg_id, company_name="Unknown"))
                     session.commit()
                     progress_bar.progress((i + 1) / total_msgs)
                     logger.info(f"Unknown company for message {msg_id}")
                     continue
 
-                # Process Tracking Logic
-                app = session.exec(select(JobApplication).where(JobApplication.company_name == company_name_variable)).first()
+                # --- USE PROCESSOR HERE ---
+                processor = ApplicationProcessor(session)
+                email_meta = {
+                    'subject': full_msg['subject'],
+                    'year': email_dt.year,
+                    'month': email_dt.month,
+                    'day': email_dt.day,
+                    'sender_name': sender_name,
+                    'sender_email': sender_email,
+                    'snippet': full_msg.get('snippet')
+                }
+                processor.process_extraction(data, email_meta)
                 
-                if not app:
-                    # Create new process
-                    app = JobApplication(
-                        company_name=company_name_variable,
-                        position=data.position,
-                        status=data.status,
-                        sender_name=sender_name,
-                        sender_email=sender_email,
-                        applied_at=email_dt,
-                        last_updated=email_dt,
-                        email_subject=full_msg['subject'],
-                        email_snippet=full_msg['snippet'],
-                        summary=data.summary,
-                        year=email_dt.year,
-                        month=email_dt.month,
-                        day=email_dt.day
-                    )
-                    session.add(app)
-                else:
-                    # Update existing process status if the new status is "higher" in rank
-                    current_rank = STATUS_RANK.get(app.status, 0)
-                    new_rank = STATUS_RANK.get(data.status, 0)
-                    
-                    if new_rank >= current_rank:
-                        app.status = data.status
-                    
-                    # Update last updated if this email is newer
-                    if email_dt > app.last_updated:
-                        app.last_updated = email_dt
-                        app.sender_name = sender_name
-                        app.sender_email = sender_email
-                        app.email_subject = full_msg['subject']
-                        app.email_snippet = full_msg['snippet']
-                        app.summary = data.summary
-
                 # Mark email as processed
-                session.add(ProcessedEmail(email_id=msg_id, company_name=company_name_variable))
+                session.add(ProcessedEmail(email_id=msg_id, company_name=data.company_name))
                 session.commit()
                 new_emails_count += 1
                 
-                status_text.text(f"Processing: {company_name_variable}...")
+                status_text.text(f"Processing: {data.company_name}...")
                 progress_bar.progress((i + 1) / total_msgs)
-                logger.info(f"Successfully processed {company_name_variable}")
+                logger.info(f"Successfully processed {data.company_name}")
                 
         except Exception as e:
             logger.error(f"Error processing message {msg_id}: {e}", exc_info=True)
@@ -257,12 +232,19 @@ def main():
             with Session(engine) as session:
                 session.exec(delete(JobApplication))
                 session.exec(delete(ProcessedEmail))
+                session.exec(delete(ApplicationEvent))
                 session.commit()
             st.warning("Database cleared!")
 
     # Metrics & UI
     with Session(engine) as session:
-        apps = session.exec(select(JobApplication)).all()
+        # Fetch active applications by default, or provide a toggle
+        show_all = st.checkbox("Show Inactive/Rejected Applications", value=False)
+        query = select(JobApplication)
+        if not show_all:
+            query = query.where(JobApplication.is_active == True)
+        
+        apps = session.exec(query).all()
         
     if not apps:
         st.info("No applications found. Click 'Sync' to start.")
@@ -272,7 +254,7 @@ def main():
     
     # Display Stats
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Applications", len(df))
+    c1.metric("Active Applications", len(df))
     c2.metric("Communications", len(df[df['status'] == ApplicationStatus.COMMUNICATION]))
     c3.metric("Interviews", len(df[df['status'] == ApplicationStatus.INTERVIEW]))
     c4.metric("Offers", len(df[df['status'] == ApplicationStatus.OFFER]))
@@ -282,25 +264,69 @@ def main():
     col_a, col_b = st.columns(2)
     with col_a:
         st.subheader("Process Status")
-        fig = px.pie(df, names='status', hole=0.4)
-        st.plotly_chart(fig, width='stretch')
+        if not df.empty:
+            fig = px.pie(df, names='status', hole=0.4)
+            st.plotly_chart(fig, width='stretch')
     with col_b:
         st.subheader("Activity Timeline")
-        df['date'] = pd.to_datetime(df['last_updated']).dt.date
-        timeline = df.groupby('date').size().reset_index(name='count')
-        fig2 = px.bar(timeline, x='date', y='count')
-        st.plotly_chart(fig2, width='stretch')
+        if not df.empty:
+            df['date'] = pd.to_datetime(df['last_updated']).dt.date
+            timeline = df.groupby('date').size().reset_index(name='count')
+            fig2 = px.bar(timeline, x='date', y='count')
+            st.plotly_chart(fig2, width='stretch')
 
     st.subheader("Application Pipeline")
-    df['Applied Date'] = pd.to_datetime(df['applied_at']).dt.strftime('%Y-%m-%d')
-    df['Last Email'] = pd.to_datetime(df['last_updated']).dt.strftime('%Y-%m-%d')
-    
-    st.dataframe(
-        df[['Applied Date', 'company_name', 'status', 'sender_name', 'sender_email', 'Last Email', 'email_subject', 'summary']].sort_values(by='Last Email', ascending=False),
-        width='stretch',
-        hide_index=True,
-        height=600
-    )
+    if not df.empty:
+        df['Applied Date'] = pd.to_datetime(df['created_at']).dt.strftime('%Y-%m-%d')
+        df['Last Update'] = pd.to_datetime(df['last_updated']).dt.strftime('%Y-%m-%d')
+        
+        # Display main table
+        st.dataframe(
+            df[['Applied Date', 'company_name', 'position', 'status', 'Last Update', 'email_subject']].sort_values(by='Last Update', ascending=False),
+            width='stretch',
+            hide_index=True,
+            height=400,
+            selection_mode="single-row",
+            on_select="rerun" 
+            # Note: on_select is a newer Streamlit feature, if not available we use standard drill down below
+        )
+        
+        # --- DRILL DOWN / HISTORY VIEW ---
+        st.divider()
+        st.subheader("🔎 Application Details & History")
+        
+        selected_company = st.selectbox("Select Company to View History", options=[""] + sorted(df['company_name'].unique().tolist()))
+        
+        if selected_company:
+            # Fetch full details including history
+            with Session(engine) as session:
+                app_details = session.exec(select(JobApplication).where(JobApplication.company_name == selected_company)).first()
+                if app_details:
+                    # History
+                    history = session.exec(select(ApplicationEvent).where(ApplicationEvent.application_id == app_details.id).order_by(ApplicationEvent.event_date.desc())).all()
+                    
+                    hd1, hd2 = st.columns([1, 2])
+                    with hd1:
+                        st.markdown(f"**Company:** {app_details.company_name}")
+                        st.markdown(f"**Position:** {app_details.position}")
+                        st.markdown(f"**Status:** {app_details.status.value}")
+                        st.markdown(f"**Last Updated:** {app_details.last_updated.strftime('%Y-%m-%d')}")
+                    
+                    with hd2:
+                        st.markdown("### Event Log")
+                        if history:
+                            history_data = []
+                            for h in history:
+                                history_data.append({
+                                    "Date": h.event_date.strftime('%Y-%m-%d %H:%M'),
+                                    "Event": f"{h.old_status} -> {h.new_status}" if h.old_status else f"New Application ({h.new_status})",
+                                    "Summary": h.summary,
+                                    "Subject": h.email_subject
+                                })
+                            st.dataframe(pd.DataFrame(history_data), use_container_width=True, hide_index=True)
+                        else:
+                            st.info("No history events recorded.")
+
 
 if __name__ == "__main__":
     main()
