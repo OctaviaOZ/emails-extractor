@@ -1,12 +1,19 @@
-import re
 import os
 import json
 import logging
-from typing import Optional
-from bs4 import BeautifulSoup
+import time
+from typing import Optional, List, Type
+from abc import ABC, abstractmethod
+
 from pydantic import BaseModel, Field
-from models import ApplicationStatus
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from app.models import ApplicationStatus
+from tenacity import retry, stop_after_attempt, wait_exponential
+import re
+
+# LLM SDKs
+import anthropic
+import openai
+import google.generativeai as genai
 
 logger = logging.getLogger(__name__)
 
@@ -16,133 +23,144 @@ class ExtractedData(BaseModel):
     status: ApplicationStatus
     summary: str
 
-class EmailExtractor:
-    def __init__(self, config: Optional[dict] = None, openai_api_key: Optional[str] = None, gemini_api_key: Optional[str] = None):
-        self.config = config or {}
-        self.openai_key = openai_api_key or os.getenv("OPENAI_API_KEY")
-        self.gemini_key = gemini_api_key or os.getenv("GOOGLE_API_KEY")
-        
-        # Handle empty strings from .env
-        if not self.openai_key: self.openai_key = None
-        if not self.gemini_key: self.gemini_key = None
-        
-        # Session-level flags to skip AI if quota is hit
-        self.skip_openai = False
-        self.skip_gemini = False
+class BaseLLMProvider(ABC):
+    """Abstract base class for all LLM providers."""
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self.last_failure_time = 0
+        self.cooldown_period = 300  # 5 minutes
 
-    def extract(self, subject: str, sender: str, body_text: str, body_html: str) -> ExtractedData:
-        # Priority 1: OpenAI (if not skipped)
-        if self.openai_key and not self.skip_openai:
-            try:
-                return self._extract_with_openai(subject, sender, body_text)
-            except Exception as e:
-                if "insufficient_quota" in str(e) or "429" in str(e):
-                    logger.warning("OpenAI quota hit. Switching to fallback for this session.")
-                    self.skip_openai = True
-                else:
-                    logger.warning(f"OpenAI extraction failed: {e}. Falling back.")
-        
-        # Priority 2: Gemini (if not skipped)
-        if self.gemini_key and not self.skip_gemini:
-             try:
-                return self._extract_with_gemini(subject, sender, body_text)
-             except Exception as e:
-                if "429" in str(e):
-                    logger.warning("Gemini quota hit. Switching to fallback for this session.")
-                    self.skip_gemini = True
-                else:
-                    logger.warning(f"Gemini extraction failed: {e}. Falling back.")
+    @property
+    def is_available(self) -> bool:
+        return (time.time() - self.last_failure_time) > self.cooldown_period
 
-        # Priority 3: Heuristic Extraction (Fast, Free)
-        return self._extract_heuristic(subject, sender, body_text, body_html)
+    def mark_failure(self):
+        self.last_failure_time = time.time()
 
-    @retry(
-        stop=stop_after_attempt(2),
-        wait=wait_exponential(multiplier=1, min=2, max=5),
-        reraise=True
-    )
-    def _extract_with_openai(self, subject: str, sender: str, text: str) -> ExtractedData:
-        from openai import OpenAI
-        client = OpenAI(api_key=self.openai_key)
+    @abstractmethod
+    def extract(self, prompt: str) -> ExtractedData:
+        pass
+
+class ClaudeProvider(BaseLLMProvider):
+    def extract(self, prompt: str) -> ExtractedData:
+        client = anthropic.Anthropic(api_key=self.api_key)
+        # Using Claude's tool-use for guaranteed structured output
+        response = client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=1000,
+            tools=[{
+                "name": "record_job_data",
+                "description": "Save job application details",
+                "input_schema": ExtractedData.model_json_schema()
+            }],
+            tool_choice={"type": "tool", "name": "record_job_data"},
+            messages=[{"role": "user", "content": prompt}]
+        )
         
-        prompt = f"""
-        Analyze this job application email and extract data into JSON.
-        Sender: {sender}
-        Subject: {subject}
-        Body: {text[:3000]}
+        # Check if any tool was used
+        if response.content and response.content[0].type == 'tool_use':
+             data = response.content[0].input
+             return ExtractedData(**data)
         
-        IMPORTANT: Extract the ACTUAL EMPLOYER (the company applied to).
-        - IGNORE platform names (Workday, LinkedIn, SmartRecruiters, Greenhouse, Lever, Personio, etc.).
-        
-        Extract:
-        1. "company_name": The employer name.
-        2. "position": The job title (if mentioned).
-        3. "status": One of: 'Applied', 'Communication', 'Interview', 'Assessment', 'Offer', 'Rejected'.
-        4. "summary": A very short (one sentence) summary of the current state.
-        """
-        
-        completion = client.chat.completions.create(
-            model="gpt-3.5-turbo-0125",
+        # Fallback if no tool called (unlikely with tool_choice forced)
+        raise ValueError("Claude did not return a tool use response")
+
+class OpenAIProvider(BaseLLMProvider):
+    def extract(self, prompt: str) -> ExtractedData:
+        client = openai.OpenAI(api_key=self.api_key)
+        # Using native structured output (JSON schema)
+        completion = client.beta.chat.completions.parse(
+            model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are a recruitment data extractor. Return JSON only."},
+                {"role": "system", "content": "You are a recruitment data extractor."}, 
                 {"role": "user", "content": prompt}
             ],
-            response_format={ "type": "json_object" }
+            response_format=ExtractedData,
         )
-        
-        content = completion.choices[0].message.content
-        data = json.loads(content)
-        
-        status_str = data.get("status", "Unknown")
-        status = self._map_status(status_str)
+        return completion.choices[0].message.parsed
 
-        return ExtractedData(
-            company_name=data.get("company_name", "Unknown"),
-            position=data.get("position"),
-            status=status,
-            summary=data.get("summary", f"AI Summary: {status_str}")
-        )
-
-    @retry(
-        stop=stop_after_attempt(2),
-        wait=wait_exponential(multiplier=1, min=2, max=5),
-        reraise=True
-    )
-    def _extract_with_gemini(self, subject: str, sender: str, text: str) -> ExtractedData:
-        import google.generativeai as genai
-        genai.configure(api_key=self.gemini_key)
+class GeminiProvider(BaseLLMProvider):
+    def extract(self, prompt: str) -> ExtractedData:
+        genai.configure(api_key=self.api_key)
         model = genai.GenerativeModel('gemini-2.0-flash')
         
-        prompt = f"""
-        Analyze this recruitment email and return a JSON object.
-        Sender: {sender}
-        Subject: {subject}
-        Body: {text[:4000]}
-        
-        Return JSON:
-        1. "company_name": The company name (NOT the platform like LinkedIn/Personio).
-        2. "position": Job title.
-        3. "status": One of: 'Applied', 'Communication', 'Interview', 'Assessment', 'Offer', 'Rejected'.
-        4. "summary": A very short summary of the message.
-        """
+        # Gemini doesn't always support strict Pydantic parsing in the SDK same way as OpenAI's beta yet,
+        # but we can use response_mime_type="application/json" and manual parsing as a robust enough method
+        # or use the new generation_config schema if available. 
+        # For compatibility, we'll stick to JSON mode and validation. 
         
         response = model.generate_content(
-            prompt,
+            prompt + "\n\nReturn JSON only complying with the schema: " + json.dumps(ExtractedData.model_json_schema()),
             generation_config=genai.types.GenerationConfig(
                 response_mime_type="application/json",
             ),
         )
         
-        data = json.loads(response.text)
-        status_str = data.get("status", "Unknown")
-        status = self._map_status(status_str)
+        try:
+            data = json.loads(response.text)
+            # Ensure status is valid
+            if "status" in data:
+                 # Map string to enum if needed (though Pydantic does this)
+                 pass
+            return ExtractedData(**data)
+        except Exception as e:
+             logger.error(f"Gemini parsing failed: {e}. Text: {response.text}")
+             raise e
 
-        return ExtractedData(
-            company_name=data.get("company_name", "Unknown"),
-            position=data.get("position"),
-            status=status,
-            summary=data.get("summary", f"AI Summary (G): {status_str}")
-        )
+class EmailExtractor:
+    def __init__(self, config: Optional[dict] = None):
+        self.config = config or {}
+        self.providers = self._init_providers()
+        
+    def _init_providers(self) -> List[BaseLLMProvider]:
+        providers = []
+        # Priority 1: OpenAI
+        if key := os.getenv("OPENAI_API_KEY"):
+            providers.append(OpenAIProvider(key))
+        # Priority 2: Claude
+        if key := os.getenv("ANTHROPIC_API_KEY"):
+            providers.append(ClaudeProvider(key))
+        # Priority 3: Gemini
+        if key := os.getenv("GOOGLE_API_KEY"):
+            providers.append(GeminiProvider(key))
+            
+        if not providers:
+            logger.warning("No LLM API keys found. Extraction will rely solely on heuristics.")
+            
+        return providers
+
+    def extract(self, subject: str, sender: str, body_text: str, body_html: str) -> ExtractedData:
+        prompt = self._build_prompt(subject, sender, body_text)
+        
+        # 1. Try LLM Providers in order of priority
+        for provider in self.providers:
+            if provider.is_available:
+                try:
+                    logger.info(f"Attempting extraction with {type(provider).__name__}")
+                    return provider.extract(prompt)
+                except Exception as e:
+                    logger.warning(f"Provider {type(provider).__name__} failed: {e}")
+                    provider.mark_failure()
+                    continue # Try next provider
+        
+        # 2. Final Fallback: Heuristic Extraction (Zero Cost)
+        logger.info("All LLMs unavailable or failed. Falling back to heuristics.")
+        return self._extract_heuristic(subject, sender, body_text, body_html)
+
+    def _build_prompt(self, subject: str, sender: str, text: str) -> str:
+        # Advanced cleaning: Remove excessive whitespace and limit length
+        clean_text = " ".join(text.split())[:3500]
+        return f"""
+        Extract job application data. 
+        Sender: {sender}
+        Subject: {subject}
+        Content: {clean_text}
+
+        Rules:
+        - The 'company_name' must be the employer, not the platform (e.g., use 'Tesla' not 'Workday').
+        - 'status' must be one of: {', '.join([s.value for s in ApplicationStatus])}.
+        - 'summary' should be a single, professional sentence.
+        """
 
     def _extract_heuristic(self, subject: str, sender: str, text: str, html: str) -> ExtractedData:
         extraction_cfg = self.config.get('extraction', {})
@@ -232,16 +250,3 @@ class EmailExtractor:
             status=status,
             summary=summary
         )
-
-    def _map_status(self, status_str: str) -> ApplicationStatus:
-        try:
-            return ApplicationStatus(status_str)
-        except ValueError:
-            s = status_str.lower()
-            kw_cfg = self.config.get('status_keywords', {})
-            if any(w.lower() in s for w in kw_cfg.get('rejected', [])): return ApplicationStatus.REJECTED
-            if any(w.lower() in s for w in kw_cfg.get('interview', [])): return ApplicationStatus.INTERVIEW
-            if any(w.lower() in s for w in kw_cfg.get('offer', [])): return ApplicationStatus.OFFER
-            if any(w.lower() in s for w in kw_cfg.get('applied', [])): return ApplicationStatus.APPLIED
-            if any(w.lower() in s for w in kw_cfg.get('assessment', [])): return ApplicationStatus.ASSESSMENT
-            return ApplicationStatus.COMMUNICATION

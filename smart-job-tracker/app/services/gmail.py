@@ -3,6 +3,7 @@ import pickle
 import logging
 import socket
 import ssl
+from bs4 import BeautifulSoup
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -13,6 +14,19 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 logger = logging.getLogger(__name__)
 
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
+
+def clean_html_for_llm(html: str) -> str:
+    """
+    Cleans HTML content to be LLM-friendly by removing non-essential tags
+    and reducing token usage.
+    """
+    if not html:
+        return ""
+    soup = BeautifulSoup(html, "html.parser")
+    # Remove script, style, and nav elements which contain no job info
+    for script_or_style in soup(["script", "style", "nav", "footer", "header", "meta", "link"]):
+        script_or_style.decompose()
+    return soup.get_text(separator=' ', strip=True)
 
 def get_gmail_service(credentials_path: str = 'credentials.json', token_path: str = 'token.pickle', scopes: list = None) -> Resource:
     """Shows basic usage of the Gmail API.
