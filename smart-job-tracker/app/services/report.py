@@ -5,7 +5,7 @@ from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
 from datetime import datetime
 import os
-from models import ApplicationStatus
+from app.models import ApplicationStatus
 
 def get_status_label(status, mapping=None):
     """

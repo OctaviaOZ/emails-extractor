@@ -23,11 +23,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-from services.gmail import get_gmail_service, get_message_body
-from services.extractor import EmailExtractor, ApplicationData
-from services.processor import ApplicationProcessor
-from services.report import generate_pdf_report
-from models import JobApplication, ApplicationStatus, ProcessedEmail, ApplicationEvent
+from app.services.gmail import get_gmail_service, get_message_body
+from app.services.extractor import EmailExtractor, ApplicationData
+from app.services.processor import ApplicationProcessor
+from app.services.report import generate_pdf_report
+from app.models import JobApplication, ApplicationStatus, ProcessedEmail, ApplicationEvent
 
 # --- Load Environment Variables ---
 load_dotenv(os.path.join(base_dir, ".env"))
