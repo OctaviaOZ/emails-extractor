@@ -50,13 +50,22 @@ class ApplicationProcessor:
             status=data.status,
             is_active=not data.is_rejection,
             created_at=timestamp,
-            last_updated=timestamp
+            last_updated=timestamp,
+            # Required fields
+            email_subject=meta.get('subject', 'No Subject'),
+            email_snippet=meta.get('snippet'),
+            summary=data.summary,
+            sender_name=meta.get('sender_name'),
+            sender_email=meta.get('sender_email'),
+            year=meta.get('year', timestamp.year),
+            month=meta.get('month', timestamp.month),
+            day=meta.get('day', timestamp.day)
         )
         self.session.add(new_app)
         self.session.commit()
         self.session.refresh(new_app)
         
-        self._log_event(new_app.id, None, data.status, data.summary, meta['subject'], timestamp)
+        self._log_event(new_app.id, None, data.status, data.summary, meta.get('subject', 'No Subject'), timestamp)
         logger.info(f"🆕 New Application: {data.company_name}")
 
     def _update_application(self, app: JobApplication, data: ApplicationData, meta: dict, timestamp: datetime):
@@ -68,6 +77,12 @@ class ApplicationProcessor:
         # Only update last_updated if this email is actually newer than what we have
         if timestamp > app.last_updated:
             app.last_updated = timestamp
+            # Update latest email info
+            app.email_subject = meta.get('subject', app.email_subject)
+            app.email_snippet = meta.get('snippet', app.email_snippet)
+            app.summary = data.summary
+            app.sender_name = meta.get('sender_name', app.sender_name)
+            app.sender_email = meta.get('sender_email', app.sender_email)
             
         if data.is_rejection:
             app.is_active = False # Close the process
@@ -78,7 +93,7 @@ class ApplicationProcessor:
         self.session.commit()
 
         # Add entry to history timeline
-        self._log_event(app.id, old_status, data.status, data.summary, meta['subject'], timestamp)
+        self._log_event(app.id, old_status, data.status, data.summary, meta.get('subject', 'No Subject'), timestamp)
         logger.info(f"🔄 Updated Application: {app.company_name} ({old_status} -> {data.status})")
 
     def _log_event(self, app_id, old_s, new_s, summary, subject, timestamp):
