@@ -103,24 +103,40 @@ class EmailExtractor:
         self.providers = []
         
         # Load Providers (Priority Order: Claude -> OpenAI -> Gemini)
-        if k := os.getenv("ANTHROPIC_API_KEY"): 
+        if k := os.getenv("ANTHROPIC_API_KEY"):
             self.providers.append(ClaudeProvider(k))
-        if k := os.getenv("OPENAI_API_KEY"): 
+        if k := os.getenv("OPENAI_API_KEY"):
             self.providers.append(OpenAIProvider(k))
-        if k := os.getenv("GOOGLE_API_KEY"): 
+        if k := os.getenv("GOOGLE_API_KEY"):
             self.providers.append(GeminiProvider(k))
+            
+        # Circuit Breaker state
+        self.consecutive_ai_failures = 0
+        self.max_failures = 3 # Stop trying AI after 3 consecutive failures
 
     def extract(self, subject: str, sender: str, body_text: str, body_html: str = "") -> ApplicationData:
+        # Check Circuit Breaker
+        if self.consecutive_ai_failures >= self.max_failures:
+            if self.consecutive_ai_failures == self.max_failures:
+                logger.warning("Circuit breaker tripped: Too many consecutive AI failures. Switching to heuristics for remaining emails.")
+                self.consecutive_ai_failures += 1 # Increment once more to avoid repeated logging
+            return self._extract_heuristic(subject, sender, body_text)
+
         # Try AI Providers
+        success = False
         for provider in self.providers:
             try:
-                return provider.extract(sender, subject, body_text)
+                result = provider.extract(sender, subject, body_text)
+                self.consecutive_ai_failures = 0 # Reset on success
+                success = True
+                return result
             except Exception as e:
                 logger.warning(f"Provider {provider.__class__.__name__} failed: {e}")
                 continue
         
-        # Fallback: Heuristics
-        logger.error("All AI providers failed. Falling back to Heuristics.")
+        # If we reach here, all providers failed for this email
+        self.consecutive_ai_failures += 1
+        logger.error(f"All AI providers failed (Failure count: {self.consecutive_ai_failures}). Falling back to Heuristics.")
         return self._extract_heuristic(subject, sender, body_text)
 
     def _extract_heuristic(self, subject: str, sender: str, text: str) -> ApplicationData:

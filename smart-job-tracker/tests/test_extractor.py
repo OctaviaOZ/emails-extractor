@@ -66,3 +66,41 @@ def test_all_providers_fail():
     
     assert isinstance(result, ApplicationData)
     assert result.status == ApplicationStatus.COMMUNICATION # Heuristic default
+
+@patch("app.services.extractor.ClaudeProvider.extract")
+@patch("app.services.extractor.OpenAIProvider.extract")
+@patch("app.services.extractor.GeminiProvider.extract")
+def test_circuit_breaker(mock_gemini, mock_openai, mock_claude, mock_env_keys):
+    # All providers fail
+    mock_claude.side_effect = Exception("Fail")
+    mock_openai.side_effect = Exception("Fail")
+    mock_gemini.side_effect = Exception("Fail")
+    
+    extractor = EmailExtractor()
+    extractor.max_failures = 2 # Lower threshold for test
+    
+    # 1st Failure
+    extractor.extract("S1", "s1", "B1")
+    assert extractor.consecutive_ai_failures == 1
+    
+    # 2nd Failure
+    extractor.extract("S2", "s2", "B2")
+    assert extractor.consecutive_ai_failures == 2
+    
+    # 3rd Call - Circuit Breaker should be active (>= max_failures)
+    # Providers should NOT be called again
+    mock_claude.reset_mock()
+    mock_openai.reset_mock()
+    
+    extractor.extract("S3", "s3", "B3")
+    
+    # Assert providers were NOT called
+    mock_claude.assert_not_called()
+    mock_openai.assert_not_called()
+    
+    # Failure count increments once to signal tripping, then stays
+    assert extractor.consecutive_ai_failures == 3 
+    
+    # 4th Call - Still broken
+    extractor.extract("S4", "s4", "B4")
+    mock_claude.assert_not_called()
