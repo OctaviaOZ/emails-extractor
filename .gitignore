@@ -24,3 +24,5 @@ start_app.sh
 
 .pytest_cache/
 __pycache__/
+
+models/
