@@ -1,7 +1,7 @@
 import pytest
 import os
 from unittest.mock import MagicMock, patch
-from app.services.extractor import EmailExtractor, ExtractedData, ApplicationStatus, OpenAIProvider, ClaudeProvider
+from app.services.extractor import EmailExtractor, ApplicationData, ApplicationStatus, OpenAIProvider, ClaudeProvider
 
 @pytest.fixture
 def mock_env_keys(monkeypatch):
@@ -11,56 +11,55 @@ def mock_env_keys(monkeypatch):
 
 def test_provider_initialization(mock_env_keys):
     extractor = EmailExtractor()
+    # Order in new code: Claude, OpenAI, Gemini
     assert len(extractor.providers) == 3
-    assert isinstance(extractor.providers[0], OpenAIProvider)
-    assert isinstance(extractor.providers[1], ClaudeProvider)
+    assert isinstance(extractor.providers[0], ClaudeProvider)
+    assert isinstance(extractor.providers[1], OpenAIProvider)
     # 3rd is Gemini
 
-@patch("app.services.extractor.OpenAIProvider.extract")
-def test_openai_success(mock_extract, mock_env_keys):
-    mock_extract.return_value = ExtractedData(
-        company_name="OpenAI Corp",
+@patch("app.services.extractor.ClaudeProvider.extract")
+def test_claude_success(mock_extract, mock_env_keys):
+    mock_extract.return_value = ApplicationData(
+        company_name="Claude Corp",
+        position="Software Engineer",
         status=ApplicationStatus.APPLIED,
-        summary="Applied successfully"
+        summary="Applied successfully",
+        is_rejection=False,
+        next_step="Wait"
     )
     
     extractor = EmailExtractor()
-    result = extractor.extract("Subject", "sender", "Body", "HTML")
+    result = extractor.extract("Subject", "sender", "Body")
     
-    assert result.company_name == "OpenAI Corp"
+    assert result.company_name == "Claude Corp"
     mock_extract.assert_called_once()
 
-@patch("app.services.extractor.OpenAIProvider.extract")
 @patch("app.services.extractor.ClaudeProvider.extract")
-def test_failover_to_claude(mock_claude_extract, mock_openai_extract, mock_env_keys):
-    # OpenAI fails
-    mock_openai_extract.side_effect = Exception("OpenAI Down")
+@patch("app.services.extractor.OpenAIProvider.extract")
+def test_failover_to_openai(mock_openai_extract, mock_claude_extract, mock_env_keys):
+    # Claude fails
+    mock_claude_extract.side_effect = Exception("Claude Down")
     
-    # Claude succeeds
-    mock_claude_extract.return_value = ExtractedData(
-        company_name="Claude Inc",
+    # OpenAI succeeds
+    mock_openai_extract.return_value = ApplicationData(
+        company_name="OpenAI Inc",
+        position=None,
         status=ApplicationStatus.INTERVIEW,
-        summary="Interview scheduled"
+        summary="Interview scheduled",
+        is_rejection=False,
+        next_step="Book time"
     )
     
     extractor = EmailExtractor()
-    result = extractor.extract("Subject", "sender", "Body", "HTML")
+    result = extractor.extract("Subject", "sender", "Body")
     
-    assert result.company_name == "Claude Inc"
-    mock_openai_extract.assert_called_once()
+    assert result.company_name == "OpenAI Inc"
     mock_claude_extract.assert_called_once()
-    
-    # Verify OpenAI provider is marked as failed (unavailable)
-    assert not extractor.providers[0].is_available
+    mock_openai_extract.assert_called_once()
 
-def test_heuristic_fallback():
+def test_all_providers_fail():
     # No keys set, so no providers
     extractor = EmailExtractor() 
     
-    # Subject matching heuristic
-    result = extractor.extract("Application for Software Engineer received", "hr@example.com", "Body", "HTML")
-    
-    # Just checking it returns a valid object and tries to parse
-    assert isinstance(result, ExtractedData)
-    # "received" pattern usually extracts company if nicely formatted, but here simple check
-    assert result.status == ApplicationStatus.COMMUNICATION # Default if keywords missing
+    with pytest.raises(Exception, match="All AI providers failed"):
+        extractor.extract("Subject", "sender", "Body")
