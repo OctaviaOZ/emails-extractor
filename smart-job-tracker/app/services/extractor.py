@@ -12,6 +12,12 @@ import anthropic
 import openai
 import google.generativeai as genai
 
+# Try to import llama_cpp for local provider
+try:
+    from llama_cpp import Llama
+except ImportError:
+    Llama = None
+
 logger = logging.getLogger(__name__)
 
 # --- Structured Output Schema ---
@@ -28,6 +34,58 @@ class LLMProvider(ABC):
     @abstractmethod
     def extract(self, sender: str, subject: str, body: str) -> ApplicationData:
         pass
+
+# --- Local Llama Implementation ---
+class LocalProvider(LLMProvider):
+    def __init__(self, model_path):
+        if not Llama:
+            raise ImportError("llama-cpp-python is not installed. Run `poetry add llama-cpp-python`.")
+        
+        # Initialize Llama 3.2
+        # n_ctx=8192 allows for long email threads
+        self.llm = Llama(
+            model_path=model_path,
+            n_ctx=8192,
+            n_threads=4, # Adjust based on your CPU cores
+            verbose=False
+        )
+
+    def extract(self, sender: str, subject: str, body: str) -> ApplicationData:
+        # Llama 3.2 Instruct Prompt Template
+        system_prompt = (
+            "You are an expert recruiter AI. Analyze the job email and extract data in strictly valid JSON format. "
+            "Fields: company_name, position (nullable), status (Applied, Interview, Assessment, Offer, Rejected, Communication), "
+            "summary, is_rejection (bool), next_step (nullable)."
+        )
+        
+        user_content = f"Sender: {sender}\nSubject: {subject}\nBody: {body[:6000]}"
+        
+        prompt = (
+            f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n{system_prompt}<|eot_id|>"
+            f"<|start_header_id|>user<|end_header_id|>\n\n{user_content}<|eot_id|>"
+            f"<|start_header_id|>assistant<|end_header_id|>\n\n"
+        )
+
+        # Force JSON response using grammar or response_format
+        response = self.llm.create_completion(
+            prompt,
+            max_tokens=512,
+            temperature=0.1,
+            response_format={"type": "json_object"}, # Requires newer llama-cpp-python
+            stop=["<|eot_id|>"]
+        )
+        
+        # Parse output
+        try:
+            import json
+            text = response['choices'][0]['text']
+            # Clean generic markdown code blocks if present
+            text = text.replace("```json", "").replace("```", "").strip()
+            data = json.loads(text)
+            return ApplicationData(**data)
+        except Exception as e:
+            logger.error(f"Local LLM JSON parsing failed: {e}")
+            raise e
 
 # --- Claude Implementation (Best Reasoning) ---
 class ClaudeProvider(LLMProvider):
@@ -102,7 +160,19 @@ class EmailExtractor:
         self.config = config or {}
         self.providers = []
         
-        # Load Providers (Priority Order: Claude -> OpenAI -> Gemini)
+        # 1. Check for Local Model First (Priority)
+        # Assumes model is in 'models/' folder relative to project root
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        local_model_path = os.path.join(base_dir, "models", "Llama-3.2-3B-Instruct-Q4_K_M.gguf")
+        
+        if os.path.exists(local_model_path):
+            logger.info(f"Loading Local Llama Model from {local_model_path}...")
+            try:
+                self.providers.append(LocalProvider(local_model_path))
+            except Exception as e:
+                logger.error(f"Failed to load Local Provider: {e}")
+
+        # 2. Load Cloud Providers (Fallbacks)
         if k := os.getenv("ANTHROPIC_API_KEY"):
             self.providers.append(ClaudeProvider(k))
         if k := os.getenv("OPENAI_API_KEY"):
