@@ -10,7 +10,7 @@ class ApplicationProcessor:
     def __init__(self, session: Session):
         self.session = session
 
-    def process_extraction(self, data: ApplicationData, email_meta: dict):
+    def process_extraction(self, data: ApplicationData, email_meta: dict, email_timestamp: datetime):
         """
         Main logic: Link email -> Application.
         """
@@ -30,7 +30,7 @@ class ApplicationProcessor:
             selected_app = None
         elif data.status == ApplicationStatus.APPLIED:
             # "Applied" usually signals a new start, unless we have a very recent active app (e.g. < 7 days)
-            recent = next((app for app in existing_apps if (datetime.utcnow() - app.last_updated).days < 7), None)
+            recent = next((app for app in existing_apps if (email_timestamp - app.last_updated).days < 7), None)
             selected_app = recent # If recent exists, merge. If not, selected_app is None (New).
         else:
             # Ongoing status (Interview, Offer) -> attach to most recent active app
@@ -39,32 +39,36 @@ class ApplicationProcessor:
 
         # 3. Execute DB Action
         if selected_app:
-            self._update_application(selected_app, data, email_meta)
+            self._update_application(selected_app, data, email_meta, email_timestamp)
         else:
-            self._create_application(data, email_meta)
+            self._create_application(data, email_meta, email_timestamp)
 
-    def _create_application(self, data: ApplicationData, meta: dict):
+    def _create_application(self, data: ApplicationData, meta: dict, timestamp: datetime):
         new_app = JobApplication(
             company_name=data.company_name,
             position=data.position or "Unknown Position",
             status=data.status,
             is_active=not data.is_rejection,
-            created_at=datetime.utcnow(),
-            last_updated=datetime.utcnow()
+            created_at=timestamp,
+            last_updated=timestamp
         )
         self.session.add(new_app)
         self.session.commit()
         self.session.refresh(new_app)
         
-        self._log_event(new_app.id, None, data.status, data.summary, meta['subject'])
+        self._log_event(new_app.id, None, data.status, data.summary, meta['subject'], timestamp)
         logger.info(f"🆕 New Application: {data.company_name}")
 
-    def _update_application(self, app: JobApplication, data: ApplicationData, meta: dict):
+    def _update_application(self, app: JobApplication, data: ApplicationData, meta: dict, timestamp: datetime):
         old_status = app.status
         
         # Update main record
         app.status = data.status # Always take latest status
-        app.last_updated = datetime.utcnow()
+        
+        # Only update last_updated if this email is actually newer than what we have
+        if timestamp > app.last_updated:
+            app.last_updated = timestamp
+            
         if data.is_rejection:
             app.is_active = False # Close the process
         if data.position and app.position == "Unknown Position":
@@ -74,17 +78,17 @@ class ApplicationProcessor:
         self.session.commit()
 
         # Add entry to history timeline
-        self._log_event(app.id, old_status, data.status, data.summary, meta['subject'])
+        self._log_event(app.id, old_status, data.status, data.summary, meta['subject'], timestamp)
         logger.info(f"🔄 Updated Application: {app.company_name} ({old_status} -> {data.status})")
 
-    def _log_event(self, app_id, old_s, new_s, summary, subject):
+    def _log_event(self, app_id, old_s, new_s, summary, subject, timestamp):
         event = ApplicationEvent(
             application_id=app_id,
             old_status=old_s,
             new_status=new_s,
             summary=summary,
             email_subject=subject,
-            event_date=datetime.utcnow()
+            event_date=timestamp
         )
         self.session.add(event)
         self.session.commit()

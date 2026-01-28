@@ -178,7 +178,7 @@ def sync_emails(engine):
                     'sender_email': sender_email,
                     'snippet': full_msg.get('snippet')
                 }
-                processor.process_extraction(data, email_meta)
+                processor.process_extraction(data, email_meta, email_timestamp=email_dt)
                 
                 # Mark email as processed
                 session.add(ProcessedEmail(email_id=msg_id, company_name=data.company_name))
