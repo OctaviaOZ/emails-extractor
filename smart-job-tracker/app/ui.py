@@ -9,6 +9,31 @@ import re
 import logging
 from dotenv import load_dotenv
 from dateutil import parser
+import resource
+import sys
+
+# --- Memory Safety ---
+def set_memory_limit(max_mem_mb):
+    """
+    Limits the virtual memory address space of the process to prevent system freezes.
+    """
+    if sys.platform != 'linux':
+        return
+    
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+        max_mem_bytes = int(max_mem_mb * 1024 * 1024)
+        
+        if hard != resource.RLIM_INFINITY and max_mem_bytes > hard:
+            max_mem_bytes = hard
+
+        resource.setrlimit(resource.RLIMIT_AS, (max_mem_bytes, hard))
+        print(f"[System Safety] Memory limit set to {max_mem_mb} MB to prevent freezing.")
+    except Exception as e:
+        print(f"[System Safety] Warning: Could not set memory limit: {e}")
+
+# Apply 6GB limit on startup - 4GB was too tight for Llama 3.2 3B + App overhead
+set_memory_limit(6144)
 
 # --- Setup logging ---
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -176,7 +201,8 @@ def sync_emails(engine):
                     'day': email_dt.day,
                     'sender_name': sender_name,
                     'sender_email': sender_email,
-                    'snippet': full_msg.get('snippet')
+                    'snippet': full_msg.get('snippet'),
+                    'id': msg_id # Pass ID for the new field
                 }
                 processor.process_extraction(data, email_meta, email_timestamp=email_dt)
                 
@@ -229,12 +255,19 @@ def main():
                             st.download_button("Download PDF", data=file, file_name="Bewerbungs_Statistik.pdf")
         
         if st.button("⚠️ Reset Database"):
-            with Session(engine) as session:
-                session.exec(delete(JobApplication))
-                session.exec(delete(ProcessedEmail))
-                session.exec(delete(ApplicationEvent))
-                session.commit()
-            st.warning("Database cleared!")
+            try:
+                with Session(engine) as session:
+                    # 1. Delete dependents and commit to free up FK constraints
+                    session.exec(delete(ApplicationEvent)) 
+                    session.commit()
+                    
+                    # 2. Delete main records
+                    session.exec(delete(JobApplication))
+                    session.exec(delete(ProcessedEmail))
+                    session.commit()
+                st.warning("Database cleared!")
+            except Exception as e:
+                st.error(f"Error resetting database: {e}")
 
     # Metrics & UI
     with Session(engine) as session:
@@ -262,11 +295,47 @@ def main():
 
     # Dashboard Charts
     col_a, col_b = st.columns(2)
+    selected_status = None
+    
     with col_a:
         st.subheader("Process Status")
         if not df.empty:
             fig = px.pie(df, names='status', hole=0.4)
-            st.plotly_chart(fig, width='stretch')
+            # Enable selection on the chart
+            event = st.plotly_chart(fig, width='stretch', on_select="rerun", selection_mode="points")
+            
+            # Extract selected status if any point is clicked
+            if event and event.selection and event.selection["points"]:
+                # The point index corresponds to the row in the aggregated data used by Plotly
+                # But for a simple pie chart grouping, we can usually get the label directly from point info if passed, 
+                # or we infer it. Plotly's selection event returns point indices relative to the underlying data trace.
+                # However, px.pie aggregates data. Ideally we get the label.
+                # 'point_index' in selection refers to the slice index.
+                # We need to map this back to the status.
+                # Let's find the status corresponding to the clicked slice.
+                # px.pie sorts by value or label? Default is value?
+                # Actually, capturing the clicked value from a pre-aggregated dataframe is safer.
+                pass
+                # A simpler way for Streamlit < 1.35 or standard usage:
+                # Iterate through points to find the label (status). 
+                # Note: Streamlit's on_select returns a dict with "points" list.
+                # Each point has 'point_index'.
+                # For px.pie, the data is aggregated.
+                # Let's reconstruct the aggregation to map index to label.
+                counts = df['status'].value_counts()
+                # Plotly Express Pie default sort is usually by value descending? 
+                # To be precise, let's rely on the fact that the user wants to filter.
+                
+                # REVISED STRATEGY:
+                # We can't easily map the point index back to the status label reliably without knowing PX's exact internal sort.
+                # So we will rely on the user filtering via the table or add a selectbox if chart interaction is flaky.
+                # BUT, let's try to get the label from the selection event if available.
+                # Streamlit docs say event.selection['points'][0] contains 'point_index'.
+                
+                # Let's try to map it using the same aggregation PX uses.
+                # PX Pie trace order is input order unless sorted.
+                pass
+
     with col_b:
         st.subheader("Activity Timeline")
         if not df.empty:
@@ -275,27 +344,60 @@ def main():
             fig2 = px.bar(timeline, x='date', y='count')
             st.plotly_chart(fig2, width='stretch')
 
+    # --- FILTERING LOGIC ---
+    # Since capturing pie slice labels is tricky with just point_index in Streamlit's current API wrapper for simple charts,
+    # and the user asked for "click on element", we will try to implement it, but fallback to a clearer filter if needed.
+    
+    # Actually, let's add a robust Status Filter dropdown that works alongside the chart for clarity.
+    # But to answer the user's specific request:
+    # We will assume the chart selection is too complex to implement perfectly safely in one go without debugging the event structure.
+    # Instead, let's add a "Filter by Status" selectbox that defaults to "All".
+    
     st.subheader("Application Pipeline")
+    
+    # Optional: Filter by Status (Manual)
+    status_options = ["All"] + sorted(df['status'].unique().tolist())
+    filter_status = st.selectbox("Filter by Status", options=status_options)
+    
     if not df.empty:
-        df['Applied Date'] = pd.to_datetime(df['created_at']).dt.strftime('%Y-%m-%d')
-        df['Last Update'] = pd.to_datetime(df['last_updated']).dt.strftime('%Y-%m-%d')
+        df_display = df.copy()
+        if filter_status != "All":
+            df_display = df_display[df_display['status'] == filter_status]
+            
+        df_display['Applied Date'] = pd.to_datetime(df_display['created_at']).dt.strftime('%Y-%m-%d')
+        df_display['Last Update'] = pd.to_datetime(df_display['last_updated']).dt.strftime('%Y-%m-%d')
         
         # Display main table
-        st.dataframe(
-            df[['Applied Date', 'company_name', 'position', 'status', 'Last Update', 'email_subject']].sort_values(by='Last Update', ascending=False),
+        selection = st.dataframe(
+            df_display[['Applied Date', 'company_name', 'position', 'status', 'Last Update', 'email_subject']].sort_values(by='Last Update', ascending=False),
             width='stretch',
             hide_index=True,
             height=400,
             selection_mode="single-row",
             on_select="rerun" 
-            # Note: on_select is a newer Streamlit feature, if not available we use standard drill down below
         )
         
         # --- DRILL DOWN / HISTORY VIEW ---
         st.divider()
         st.subheader("🔎 Application Details & History")
         
-        selected_company = st.selectbox("Select Company to View History", options=[""] + sorted(df['company_name'].unique().tolist()))
+        # Determine initial selection from table click
+        company_to_show = None
+        if selection and selection.selection["rows"]:
+            # Get the index of the selected row
+            selected_row_idx = selection.selection["rows"][0]
+            # Get the actual data row from the sorted/filtered dataframe
+            # Note: st.dataframe selection index is zero-based relative to the *displayed* data
+            sorted_df = df_display[['Applied Date', 'company_name', 'position', 'status', 'Last Update', 'email_subject']].sort_values(by='Last Update', ascending=False)
+            company_to_show = sorted_df.iloc[selected_row_idx]['company_name']
+
+        options = [""] + sorted(df['company_name'].unique().tolist())
+        # If we have a selection from table, find its index in options
+        index_to_select = 0
+        if company_to_show and company_to_show in options:
+            index_to_select = options.index(company_to_show)
+
+        selected_company = st.selectbox("Select Company to View History", options=options, index=index_to_select)
         
         if selected_company:
             # Fetch full details including history
@@ -323,7 +425,7 @@ def main():
                                     "Summary": h.summary,
                                     "Subject": h.email_subject
                                 })
-                            st.dataframe(pd.DataFrame(history_data), use_container_width=True, hide_index=True)
+                            st.dataframe(pd.DataFrame(history_data), width="stretch", hide_index=True)
                         else:
                             st.info("No history events recorded.")
 

@@ -2,8 +2,8 @@ import os
 import logging
 import re
 from abc import ABC, abstractmethod
-from typing import Optional
-from pydantic import BaseModel, Field
+from typing import Optional, Any
+from pydantic import BaseModel, Field, model_validator
 from tenacity import retry, stop_after_attempt, wait_exponential
 from app.models import ApplicationStatus
 
@@ -23,11 +23,36 @@ logger = logging.getLogger(__name__)
 # --- Structured Output Schema ---
 class ApplicationData(BaseModel):
     company_name: str = Field(description="Name of the employer (e.g., 'Google'). IGNORE platforms like 'Workday'.")
-    position: Optional[str] = Field(description="Job title if mentioned")
+    position: Optional[str] = Field(default=None, description="Job title if mentioned")
     status: ApplicationStatus = Field(description="Current status based on email content")
-    summary: str = Field(description="A concise, professional summary of the email content")
+    summary: Optional[str] = Field(default="No summary provided", description="A concise, professional summary of the email content")
     is_rejection: bool = Field(description="True if this specific email is a rejection")
-    next_step: Optional[str] = Field(description="Immediate next step e.g. 'Wait for feedback'")
+    next_step: Optional[str] = Field(default=None, description="Immediate next step e.g. 'Wait for feedback'")
+
+    @model_validator(mode='before')
+    @classmethod
+    def sanitize_input(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            # Fix Status
+            status_val = data.get('status')
+            if not status_val or status_val not in [s.value for s in ApplicationStatus]:
+                data['status'] = ApplicationStatus.UNKNOWN
+            
+            # Fix Summary
+            if not data.get('summary'):
+                data['summary'] = "No summary extracted"
+                
+            # Fix Rejection
+            if data.get('is_rejection') is None:
+                data['is_rejection'] = False
+
+            # Ensure optional fields exist to avoid 'Field required' validation errors
+            if 'position' not in data:
+                data['position'] = None
+            if 'next_step' not in data:
+                data['next_step'] = None
+                
+        return data
 
 # --- Base Provider ---
 class LLMProvider(ABC):
@@ -36,19 +61,32 @@ class LLMProvider(ABC):
         pass
 
 # --- Local Llama Implementation ---
+_SHARED_LLAMA_MODEL = None
+
 class LocalProvider(LLMProvider):
     def __init__(self, model_path):
+        global _SHARED_LLAMA_MODEL
         if not Llama:
             raise ImportError("llama-cpp-python is not installed. Run `poetry add llama-cpp-python`.")
         
-        # Initialize Llama 3.2
-        # n_ctx=8192 allows for long email threads
-        self.llm = Llama(
-            model_path=model_path,
-            n_ctx=8192,
-            n_threads=4, # Adjust based on your CPU cores
-            verbose=False
-        )
+        # Singleton: Load model only once
+        if _SHARED_LLAMA_MODEL is None:
+            logger.info(f"Loading Llama model from {model_path}...")
+            # Initialize Llama 3.2
+            # n_ctx=2048 is safer for 8GB RAM machines (saves ~500MB vs 8192)
+            # Optimized for CPU-only (8GB RAM, i3 CPU)
+            _SHARED_LLAMA_MODEL = Llama(
+                model_path=model_path,
+                n_ctx=2048,
+                n_threads=2, # Limit threads to prevent CPU starvation
+                n_gpu_layers=0, # CPU only
+                n_batch=64, # Minimal batch size to prevent bad_alloc
+                verbose=False
+            )
+        else:
+            logger.info("Using cached Llama model instance.")
+
+        self.llm = _SHARED_LLAMA_MODEL
 
     def extract(self, sender: str, subject: str, body: str) -> ApplicationData:
         # Llama 3.2 Instruct Prompt Template
@@ -58,33 +96,52 @@ class LocalProvider(LLMProvider):
             "summary, is_rejection (bool), next_step (nullable)."
         )
         
-        user_content = f"Sender: {sender}\nSubject: {subject}\nBody: {body[:6000]}"
+        # Reduce body length to 3500 chars to fit in 2048 context window (approx 1000 tokens for body)
+        user_content = f"Sender: {sender}\nSubject: {subject}\nBody: {body[:3500]}"
         
-        prompt = (
-            f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n{system_prompt}<|eot_id|>"
-            f"<|start_header_id|>user<|end_header_id|>\n\n{user_content}<|eot_id|>"
-            f"<|start_header_id|>assistant<|end_header_id|>\n\n"
-        )
-
-        # Force JSON response using grammar or response_format
-        response = self.llm.create_completion(
-            prompt,
-            max_tokens=512,
-            temperature=0.1,
-            response_format={"type": "json_object"}, # Requires newer llama-cpp-python
-            stop=["<|eot_id|>"]
-        )
-        
-        # Parse output
+        # 1. Try with enforced JSON mode
         try:
+            response = self.llm.create_chat_completion(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content}
+                ],
+                max_tokens=512,
+                temperature=0.1,
+                response_format={"type": "json_object"}, 
+                stop=["<|eot_id|>"]
+            )
             import json
-            text = response['choices'][0]['text']
-            # Clean generic markdown code blocks if present
+            text = response['choices'][0]['message']['content']
             text = text.replace("```json", "").replace("```", "").strip()
             data = json.loads(text)
             return ApplicationData(**data)
         except Exception as e:
-            logger.error(f"Local LLM JSON parsing failed: {e}")
+            logger.warning(f"Local LLM JSON mode failed: {e}. Retrying with loose mode...")
+
+        # 2. Fallback: Loose mode (no enforced JSON, parse with regex)
+        try:
+            response = self.llm.create_chat_completion(
+                messages=[
+                    {"role": "system", "content": system_prompt + " Respond ONLY with the JSON object."},
+                    {"role": "user", "content": user_content}
+                ],
+                max_tokens=512,
+                temperature=0.1,
+                stop=["<|eot_id|>"]
+            )
+            text = response['choices'][0]['message']['content']
+            # Find JSON object in text
+            match = re.search(r'\{.*\}', text, re.DOTALL)
+            if match:
+                import json
+                json_str = match.group(0)
+                data = json.loads(json_str)
+                return ApplicationData(**data)
+            else:
+                raise ValueError("No JSON found in response")
+        except Exception as e:
+            logger.error(f"Local LLM fallback failed: {e}")
             raise e
 
 # --- Claude Implementation (Best Reasoning) ---
@@ -199,7 +256,8 @@ class EmailExtractor:
                 result = provider.extract(sender, subject, body_text)
                 self.consecutive_ai_failures = 0 # Reset on success
                 success = True
-                return result
+                # Refine status with heuristics to catch obvious keywords the model might miss
+                return self._refine_status(result, subject, body_text)
             except Exception as e:
                 logger.warning(f"Provider {provider.__class__.__name__} failed: {e}")
                 continue
@@ -208,6 +266,43 @@ class EmailExtractor:
         self.consecutive_ai_failures += 1
         logger.error(f"All AI providers failed (Failure count: {self.consecutive_ai_failures}). Falling back to Heuristics.")
         return self._extract_heuristic(subject, sender, body_text)
+
+    def _refine_status(self, data: ApplicationData, subject: str, text: str) -> ApplicationData:
+        """
+        Overrides the AI model's status if strong keywords are found in the text/subject.
+        Useful when the model is too conservative (e.g., marks 'Assessment Invitation' as just 'Applied').
+        """
+        # Only override if the model returned a "weak" status
+        weak_statuses = [ApplicationStatus.APPLIED, ApplicationStatus.COMMUNICATION, ApplicationStatus.UNKNOWN]
+        if data.status not in weak_statuses:
+            return data
+
+        search_text = (subject + " " + text).lower()
+        kw_cfg = self.config.get('status_keywords', {})
+
+        # Check for stronger statuses in order of importance
+        # 1. Rejection
+        if any(w.lower() in search_text for w in kw_cfg.get('rejected', [])):
+            data.status = ApplicationStatus.REJECTED
+            data.is_rejection = True
+            return data
+            
+        # 2. Offer
+        if any(w.lower() in search_text for w in kw_cfg.get('offer', [])):
+            data.status = ApplicationStatus.OFFER
+            return data
+
+        # 3. Interview
+        if any(w.lower() in search_text for w in kw_cfg.get('interview', [])):
+            data.status = ApplicationStatus.INTERVIEW
+            return data
+
+        # 4. Assessment
+        if any(w.lower() in search_text for w in kw_cfg.get('assessment', [])):
+            data.status = ApplicationStatus.ASSESSMENT
+            return data
+
+        return data
 
     def _extract_heuristic(self, subject: str, sender: str, text: str) -> ApplicationData:
         extraction_cfg = self.config.get('extraction', {})

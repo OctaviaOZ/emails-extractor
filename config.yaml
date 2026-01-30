@@ -2,7 +2,7 @@
 
 # Gmail API settings
 label_name: 'apply'
-start_date: '2023-05-01'  # Format: YYYY-MM-DD
+start_date: '2025-05-01'  # Format: YYYY-MM-DD
 scopes:
   - 'https://www.googleapis.com/auth/gmail.readonly'
 
@@ -123,12 +123,13 @@ status_keywords:
     - 'Gespräch einladen'
     - 'Terminvorschlag'
   offer:
-    - 'offer'
+    - 'job offer'
+    - 'employment offer'
     - 'congratulations'
     - 'pleased to offer'
     - 'Vertragsangebot'
     - 'Vertragsentwurf'
-    - 'Angebot'
+    - 'Arbeitsangebot'
   assessment:
     - 'assessment'
     - 'coding challenge'
@@ -138,6 +139,7 @@ status_keywords:
     - 'Eignungstest'
     - 'HackerRank'
     - 'Codility'
+    - 'Arbeitsprobe'
   applied:
     - 'applied'
     - 'confirming'

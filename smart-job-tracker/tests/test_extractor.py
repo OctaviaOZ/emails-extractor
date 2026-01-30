@@ -1,7 +1,7 @@
 import pytest
 import os
 from unittest.mock import MagicMock, patch
-from app.services.extractor import EmailExtractor, ApplicationData, ApplicationStatus, OpenAIProvider, ClaudeProvider
+from app.services.extractor import EmailExtractor, ApplicationData, ApplicationStatus, OpenAIProvider, ClaudeProvider, LocalProvider
 
 @pytest.fixture
 def mock_env_keys(monkeypatch):
@@ -11,11 +11,12 @@ def mock_env_keys(monkeypatch):
 
 def test_provider_initialization(mock_env_keys):
     extractor = EmailExtractor()
-    # Order in new code: Claude, OpenAI, Gemini
-    assert len(extractor.providers) == 3
-    assert isinstance(extractor.providers[0], ClaudeProvider)
-    assert isinstance(extractor.providers[1], OpenAIProvider)
-    # 3rd is Gemini
+    # Order in new code: Local, Claude, OpenAI, Gemini
+    assert len(extractor.providers) == 4
+    assert isinstance(extractor.providers[0], LocalProvider)
+    assert isinstance(extractor.providers[1], ClaudeProvider)
+    assert isinstance(extractor.providers[2], OpenAIProvider)
+    # 4th is Gemini
 
 @patch("app.services.extractor.ClaudeProvider.extract")
 def test_claude_success(mock_extract, mock_env_keys):

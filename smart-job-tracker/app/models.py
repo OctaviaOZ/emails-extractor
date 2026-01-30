@@ -24,6 +24,7 @@ STATUS_RANK = {
 }
 
 class JobApplication(SQLModel, table=True):
+    __table_args__ = {"extend_existing": True}
     id: Optional[int] = Field(default=None, primary_key=True)
     # REMOVED: unique=True constraint to allow multiple apps per company
     company_name: str = Field(index=True) 
@@ -42,6 +43,7 @@ class JobApplication(SQLModel, table=True):
     last_updated: datetime = Field(default_factory=datetime.utcnow) # Latest email date
     
     # Latest email details
+    email_id: Optional[str] = Field(default=None) # Link to specific email ID (e.g. Gmail ID)
     email_subject: str
     email_snippet: Optional[str] = None
     summary: Optional[str] = None # Short AI or heuristic summary
@@ -56,6 +58,7 @@ class JobApplication(SQLModel, table=True):
 
 class ApplicationEvent(SQLModel, table=True):
     """Stores the start-to-end history of an application."""
+    __table_args__ = {"extend_existing": True}
     id: Optional[int] = Field(default=None, primary_key=True)
     application_id: int = Field(foreign_key="jobapplication.id")
     
@@ -69,11 +72,13 @@ class ApplicationEvent(SQLModel, table=True):
 
 class ProcessedEmail(SQLModel, table=True):
     """Tracks every email ID we have analyzed to prevent double processing."""
+    __table_args__ = {"extend_existing": True}
     email_id: str = Field(primary_key=True)
     company_name: str # The company this email was attributed to
     processed_at: datetime = Field(default_factory=datetime.utcnow)
 
 class ProcessingLog(SQLModel, table=True):
+    __table_args__ = {"extend_existing": True}
     id: Optional[int] = Field(default=None, primary_key=True)
     run_date: datetime = Field(default_factory=datetime.utcnow)
     emails_processed: int
