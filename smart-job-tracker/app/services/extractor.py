@@ -25,7 +25,7 @@ class ApplicationData(BaseModel):
     company_name: str = Field(description="Name of the employer (e.g., 'Google'). IGNORE platforms like 'Workday'.")
     position: Optional[str] = Field(default=None, description="Job title if mentioned")
     status: ApplicationStatus = Field(description="Current status based on email content")
-    summary: Optional[str] = Field(default="No summary provided", description="A concise, professional summary of the email content")
+    summary: Optional[str] = Field(default="No summary provided", description="A very short, abstractive summary of the email content (max 15 words). Do NOT quote the email body.")
     is_rejection: bool = Field(description="True if this specific email is a rejection")
     next_step: Optional[str] = Field(default=None, description="Immediate next step e.g. 'Wait for feedback'")
 
@@ -91,9 +91,10 @@ class LocalProvider(LLMProvider):
     def extract(self, sender: str, subject: str, body: str) -> ApplicationData:
         # Llama 3.2 Instruct Prompt Template
         system_prompt = (
-            "You are an expert recruiter AI. Analyze the job email and extract data in strictly valid JSON format. "
-            "Fields: company_name, position (nullable), status (Applied, Interview, Assessment, Offer, Rejected, Communication), "
-            "summary, is_rejection (bool), next_step (nullable)."
+            "You are an expert email analyzer for job applications. Analyze the email below and output ONLY valid JSON with:"
+            "Fields: company_name, position (nullable), status (Applied, Interview, Assessment, Offer, Rejected, Pending), "
+            "summary (Short, abstractive summary of the update. Max 10 words. Do NOT quote email.), is_rejection (bool), next_step (nullable), keep original language: English or German)"
+            "Be precise with companies (e.g. 'Deutsche Bahn AG', 'Amazon GmbH'). For status, prioritize explicit words."
         )
         
         # Reduce body length to 3500 chars to fit in 2048 context window (approx 1000 tokens for body)
@@ -178,7 +179,7 @@ class OpenAIProvider(LLMProvider):
         completion = self.client.beta.chat.completions.parse(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are an expert recruiter AI. Extract the employer name precisely."},
+                {"role": "system", "content": "You are an expert recruiter AI. Extract the employer name precisely. Summarize the content abstractively (do not quote)."},
                 {"role": "user", "content": f"Sender: {sender}\nSubject: {subject}\nBody: {body[:8000]}"}
             ],
             response_format=ApplicationData,
@@ -197,8 +198,8 @@ class GeminiProvider(LLMProvider):
         {{
             "company_name": str,
             "position": str (nullable),
-            "status": str (Applied, Interview, Assessment, Offer, Rejected, Communication),
-            "summary": str,
+            "status": str (Applied, Interview, Assessment, Offer, Rejected, Pending),
+            "summary": str (Short executive summary of the status. Max 15 words. e.g. "Invitation to first round interview"),
             "is_rejection": bool,
             "next_step": str (nullable)
         }}
@@ -273,7 +274,7 @@ class EmailExtractor:
         Useful when the model is too conservative (e.g., marks 'Assessment Invitation' as just 'Applied').
         """
         # Only override if the model returned a "weak" status
-        weak_statuses = [ApplicationStatus.APPLIED, ApplicationStatus.COMMUNICATION, ApplicationStatus.UNKNOWN]
+        weak_statuses = [ApplicationStatus.APPLIED, ApplicationStatus.PENDING, ApplicationStatus.UNKNOWN]
         if data.status not in weak_statuses:
             return data
 
@@ -361,7 +362,7 @@ class EmailExtractor:
 
         # Status Detection
         search_text = (subject + " " + text).lower()
-        status = ApplicationStatus.COMMUNICATION
+        status = ApplicationStatus.PENDING
         kw_cfg = self.config.get('status_keywords', {})
         
         if any(w.lower() in search_text for w in kw_cfg.get('rejected', [])):

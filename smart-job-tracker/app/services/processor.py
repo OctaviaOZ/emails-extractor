@@ -93,30 +93,30 @@ class ApplicationProcessor:
 
         if is_app_active:
             # Case 2: Active Application Exists
-            # "Applied" can only happen once. If we see it again, treat as Communication.
-            # "Unknown" after Applied is Communication.
+            # "Applied" can only happen once. If we see it again, treat as Pending.
+            # "Unknown" after Applied is Pending.
             new_status = data.status
             
             if new_status == ApplicationStatus.APPLIED:
                 # Already active, don't restart status loop. Treat as confirmation/comm.
-                new_status = ApplicationStatus.COMMUNICATION
+                new_status = ApplicationStatus.PENDING
                 if data.summary == "No summary extracted":
                     data.summary = "Application confirmation/update"
             elif new_status == ApplicationStatus.UNKNOWN:
-                new_status = ApplicationStatus.COMMUNICATION
+                new_status = ApplicationStatus.PENDING
 
             # Check if we should update the DB status
             # Only update if the new status is "meaningful" or advances the process
-            # But if it's COMMUNICATION, we just log it and update timestamps, usually keeping the old MAIN status?
-            # Actually, user wants "after applied... it's all communication".
+            # But if it's PENDING, we just log it and update timestamps, usually keeping the old MAIN status?
+            # Actually, user wants "after applied... it's all PENDING".
             # But if it's INTERVIEW, we should update.
-            # So: Update if status != COMMUNICATION and != APPLIED (handled above)
+            # So: Update if status != PENDING and != APPLIED (handled above)
             
-            # Refined: If new_status is COMMUNICATION, we generally keep the OLD status (e.g. keep "Applied" or "Interview")
+            # Refined: If new_status is PENDING, we generally keep the OLD status (e.g. keep "Applied" or "Interview")
             # unless the old status was Unknown.
             
             final_status_for_db = existing_app.status
-            if new_status not in [ApplicationStatus.COMMUNICATION, ApplicationStatus.UNKNOWN]:
+            if new_status not in [ApplicationStatus.PENDING, ApplicationStatus.UNKNOWN]:
                 final_status_for_db = new_status
             
             # Update the app
@@ -124,7 +124,7 @@ class ApplicationProcessor:
 
         else:
             # Case 3: Inactive (Rejected) Application Exists
-            # User: "After absage it can be communication more and application as well"
+            # User: "After absage it can be PENDING more and application as well"
             if data.status == ApplicationStatus.APPLIED:
                 # Re-application -> Create NEW active application
                 self._create_application(data, email_meta, email_timestamp)
@@ -132,7 +132,7 @@ class ApplicationProcessor:
                 # Strong signal -> Start NEW active application (Revival?)
                 self._create_application(data, email_meta, email_timestamp)
             else:
-                # Communication/Unknown/Rejected -> Append to the inactive log (don't re-activate)
+                # PENDING/Unknown/Rejected -> Append to the inactive log (don't re-activate)
                 # Just log the event to history, update last_updated, keep inactive.
                 self._update_application(existing_app, data, email_meta, email_timestamp, override_status=existing_app.status)
 
@@ -194,10 +194,10 @@ class ApplicationProcessor:
 
         # Add entry to history timeline
         # Use data.status for the event log to record what THIS specific email was,
-        # even if it didn't change the main app status (e.g. Communication).
+        # even if it didn't change the main app status (e.g. PENDING).
         event_status = data.status 
         if event_status == ApplicationStatus.UNKNOWN:
-            event_status = ApplicationStatus.COMMUNICATION
+            event_status = ApplicationStatus.PENDING
 
         self._log_event(app.id, old_status, event_status, data.summary, meta.get('subject', 'No Subject'), timestamp)
         logger.info(f"🔄 Updated Application: {app.company_name} ({old_status} -> {new_status})")

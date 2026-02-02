@@ -7,7 +7,7 @@ class ApplicationStatus(str, Enum):
     APPLIED = "Applied"
     INTERVIEW = "Interview"
     ASSESSMENT = "Assessment"
-    COMMUNICATION = "Communication"
+    PENDING = "Pending"
     OFFER = "Offer"
     REJECTED = "Rejected"
     UNKNOWN = "Unknown"
@@ -16,7 +16,7 @@ class ApplicationStatus(str, Enum):
 STATUS_RANK = {
     ApplicationStatus.UNKNOWN: 0,
     ApplicationStatus.APPLIED: 1,
-    ApplicationStatus.COMMUNICATION: 2,
+    ApplicationStatus.PENDING: 2,
     ApplicationStatus.ASSESSMENT: 3,
     ApplicationStatus.INTERVIEW: 4,
     ApplicationStatus.REJECTED: 5,

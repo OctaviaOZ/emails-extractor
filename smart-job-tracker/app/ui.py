@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 from app.services.gmail import get_gmail_service, get_message_body
 from app.services.extractor import EmailExtractor, ApplicationData
 from app.services.processor import ApplicationProcessor
-from app.services.report import generate_pdf_report
+from app.services.report import generate_pdf_report, generate_word_report
 from app.models import JobApplication, ApplicationStatus, ProcessedEmail, ApplicationEvent
 
 # --- Load Environment Variables ---
@@ -242,17 +242,55 @@ def main():
         if st.button("🔄 Sync with Gmail", type="primary"):
             sync_emails(engine)
             
-        if st.button("📄 Generate Report"):
-            with Session(engine) as session:
-                apps = session.exec(select(JobApplication)).all()
-                if apps:
-                    report_path = os.path.join(base_dir, "report.pdf")
-                    config = load_config()
-                    generated_file = generate_pdf_report(apps, report_path, config=config)
-                    if generated_file:
-                        st.success("Report generated!")
-                        with open(generated_file, "rb") as file:
-                            st.download_button("Download PDF", data=file, file_name="Bewerbungs_Statistik.pdf")
+        st.divider()
+        st.subheader("Reports")
+        
+        # Date Range Picker
+        today = datetime.now()
+        start_of_year = datetime(today.year, 1, 1)
+        
+        date_range = st.date_input(
+            "Report Period",
+            value=(start_of_year, today),
+            format="DD.MM.YYYY"
+        )
+        
+        col_r1, col_r2 = st.columns(2)
+        
+        with col_r1:
+            if st.button("📄 PDF Report"):
+                with Session(engine) as session:
+                    apps = session.exec(select(JobApplication)).all()
+                    if apps:
+                        report_path = os.path.join(base_dir, "report.pdf")
+                        config = load_config()
+                        generated_file = generate_pdf_report(apps, report_path, config=config)
+                        if generated_file:
+                            st.success("PDF Generated!")
+                            with open(generated_file, "rb") as file:
+                                st.download_button("Download PDF", data=file, file_name="Bewerbungs_Statistik.pdf")
+
+        with col_r2:
+            if st.button("📝 Word Report"):
+                with Session(engine) as session:
+                    apps = session.exec(select(JobApplication)).all()
+                    if apps:
+                        report_path = os.path.join(base_dir, "report.docx")
+                        config = load_config()
+                        
+                        start_date = None
+                        end_date = None
+                        if isinstance(date_range, tuple):
+                            if len(date_range) > 0: start_date = date_range[0]
+                            if len(date_range) > 1: end_date = date_range[1]
+                        
+                        generated_file = generate_word_report(apps, report_path, start_date=start_date, end_date=end_date, config=config)
+                        if generated_file:
+                            st.success("DOCX Generated!")
+                            with open(generated_file, "rb") as file:
+                                st.download_button("Download DOCX", data=file, file_name="Bewerbungs_Bericht.docx")
+        
+        st.divider()
         
         if st.button("⚠️ Reset Database"):
             try:
@@ -288,7 +326,7 @@ def main():
     # Display Stats
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Active Applications", len(df))
-    c2.metric("Communications", len(df[df['status'] == ApplicationStatus.COMMUNICATION]))
+    c2.metric("Pending", len(df[df['status'] == ApplicationStatus.PENDING]))
     c3.metric("Interviews", len(df[df['status'] == ApplicationStatus.INTERVIEW]))
     c4.metric("Offers", len(df[df['status'] == ApplicationStatus.OFFER]))
     c5.metric("Rejections", len(df[df['status'] == ApplicationStatus.REJECTED]))
@@ -369,7 +407,7 @@ def main():
         
         # Display main table
         selection = st.dataframe(
-            df_display[['Applied Date', 'company_name', 'position', 'status', 'Last Update', 'email_subject']].sort_values(by='Last Update', ascending=False),
+            df_display[['Applied Date', 'company_name', 'position', 'status', 'Last Update', 'summary']].sort_values(by='Last Update', ascending=False),
             width='stretch',
             hide_index=True,
             height=400,
@@ -388,7 +426,7 @@ def main():
             selected_row_idx = selection.selection["rows"][0]
             # Get the actual data row from the sorted/filtered dataframe
             # Note: st.dataframe selection index is zero-based relative to the *displayed* data
-            sorted_df = df_display[['Applied Date', 'company_name', 'position', 'status', 'Last Update', 'email_subject']].sort_values(by='Last Update', ascending=False)
+            sorted_df = df_display[['Applied Date', 'company_name', 'position', 'status', 'Last Update', 'summary']].sort_values(by='Last Update', ascending=False)
             company_to_show = sorted_df.iloc[selected_row_idx]['company_name']
 
         options = [""] + sorted(df['company_name'].unique().tolist())
