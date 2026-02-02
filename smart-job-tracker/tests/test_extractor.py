@@ -66,7 +66,7 @@ def test_all_providers_fail():
     result = extractor.extract("Application for Software Engineer received", "hr@example.com", "Body")
     
     assert isinstance(result, ApplicationData)
-    assert result.status == ApplicationStatus.COMMUNICATION # Heuristic default
+    assert result.status == ApplicationStatus.PENDING # Heuristic default
 
 @patch("app.services.extractor.ClaudeProvider.extract")
 @patch("app.services.extractor.OpenAIProvider.extract")
