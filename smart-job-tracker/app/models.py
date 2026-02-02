@@ -4,13 +4,13 @@ from sqlmodel import Field, SQLModel, Relationship
 from enum import Enum
 
 class ApplicationStatus(str, Enum):
-    APPLIED = "Applied"
-    INTERVIEW = "Interview"
-    ASSESSMENT = "Assessment"
-    PENDING = "Pending"
-    OFFER = "Offer"
-    REJECTED = "Rejected"
-    UNKNOWN = "Unknown"
+    APPLIED = "APPLIED"
+    INTERVIEW = "INTERVIEW"
+    ASSESSMENT = "ASSESSMENT"
+    PENDING = "PENDING"
+    OFFER = "OFFER"
+    REJECTED = "REJECTED"
+    UNKNOWN = "UNKNOWN"
 
 # Define the progression order - higher rank updates lower rank
 STATUS_RANK = {

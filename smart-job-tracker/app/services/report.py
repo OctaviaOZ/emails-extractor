@@ -73,13 +73,13 @@ def generate_word_report(applications, output_filename, start_date=None, end_dat
 
     # German Mapping
     german_mapping = {
-        "Applied": "Beworben",
-        "Interview": "Interview",
-        "Assessment": "Assessment",
-        "Pending": "Laufend",
-        "Offer": "Angebot",
-        "Rejected": "Abgelehnt",
-        "Unknown": "Unbekannt"
+        "APPLIED": "Beworben",
+        "INTERVIEW": "Interview",
+        "ASSESSMENT": "Assessment",
+        "PENDING": "Laufend",
+        "OFFER": "Angebot",
+        "REJECTED": "Abgelehnt",
+        "UNKNOWN": "Unbekannt"
     }
 
     # Prepare Report Data

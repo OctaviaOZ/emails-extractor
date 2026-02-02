@@ -193,7 +193,7 @@ def sync_emails(engine):
                     continue
 
                 # --- USE PROCESSOR HERE ---
-                processor = ApplicationProcessor(session)
+                processor = ApplicationProcessor(session, config=config)
                 email_meta = {
                     'subject': full_msg['subject'],
                     'year': email_dt.year,

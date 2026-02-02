@@ -91,10 +91,15 @@ class LocalProvider(LLMProvider):
     def extract(self, sender: str, subject: str, body: str) -> ApplicationData:
         # Llama 3.2 Instruct Prompt Template
         system_prompt = (
-            "You are an expert email analyzer for job applications. Analyze the email below and output ONLY valid JSON with:"
-            "Fields: company_name, position (nullable), status (Applied, Interview, Assessment, Offer, Rejected, Pending), "
-            "summary (Short, abstractive summary of the update. Max 10 words. Do NOT quote email.), is_rejection (bool), next_step (nullable), keep original language: English or German)"
-            "Be precise with companies (e.g. 'Deutsche Bahn AG', 'Amazon GmbH'). For status, prioritize explicit words."
+            "You are an expert recruiter AI. Analyze the job email and output ONLY valid JSON.\n"
+            "Fields: company_name, position (nullable), status, summary, is_rejection (bool), next_step (nullable).\n"
+            "Status MUST be one of: Applied, Interview, Assessment, Offer, Rejected, Pending.\n"
+            "IMPORTANT CLASSIFICATION RULES:\n"
+            "- 'Rejected': Includes polite rejections, feedback after interview saying 'no', or suggestions to apply for other/lower-level roles.\n"
+            "- 'Offer': ONLY for positive job offers, contracts, or intent to hire for the current position.\n"
+            "- 'Assessment': For tests, tasks, Arbeitsproben.\n"
+            "- Summary: Short (max 10 words), abstractive, keep same language as email.\n"
+            "If the email says 'look at our job board for other roles' or 'not for this position', it is REJECTED."
         )
         
         # Reduce body length to 3500 chars to fit in 2048 context window (approx 1000 tokens for body)
@@ -271,36 +276,37 @@ class EmailExtractor:
     def _refine_status(self, data: ApplicationData, subject: str, text: str) -> ApplicationData:
         """
         Overrides the AI model's status if strong keywords are found in the text/subject.
-        Useful when the model is too conservative (e.g., marks 'Assessment Invitation' as just 'Applied').
+        Useful when the model is too conservative (e.g., marks 'Assessment Invitation' as just 'Applied')
+        or wrong (e.g. marks 'Arbeitsprobe' as 'Offer').
         """
-        # Only override if the model returned a "weak" status
-        weak_statuses = [ApplicationStatus.APPLIED, ApplicationStatus.PENDING, ApplicationStatus.UNKNOWN]
-        if data.status not in weak_statuses:
-            return data
-
         search_text = (subject + " " + text).lower()
         kw_cfg = self.config.get('status_keywords', {})
 
-        # Check for stronger statuses in order of importance
-        # 1. Rejection
+        # 1. Rejection always overrides
         if any(w.lower() in search_text for w in kw_cfg.get('rejected', [])):
             data.status = ApplicationStatus.REJECTED
             data.is_rejection = True
             return data
-            
-        # 2. Offer
+
+        # 2. Assessment keywords should override anything except rejection
+        # This fixes cases where positive assessment feedback is mistaken for an offer
+        if any(w.lower() in search_text for w in kw_cfg.get('assessment', [])):
+            data.status = ApplicationStatus.ASSESSMENT
+            return data
+
+        # For other statuses, only override "weak" or "unknown" ones
+        weak_statuses = [ApplicationStatus.APPLIED, ApplicationStatus.PENDING, ApplicationStatus.UNKNOWN]
+        if data.status not in weak_statuses:
+            return data
+
+        # 3. Offer
         if any(w.lower() in search_text for w in kw_cfg.get('offer', [])):
             data.status = ApplicationStatus.OFFER
             return data
 
-        # 3. Interview
+        # 4. Interview
         if any(w.lower() in search_text for w in kw_cfg.get('interview', [])):
             data.status = ApplicationStatus.INTERVIEW
-            return data
-
-        # 4. Assessment
-        if any(w.lower() in search_text for w in kw_cfg.get('assessment', [])):
-            data.status = ApplicationStatus.ASSESSMENT
             return data
 
         return data

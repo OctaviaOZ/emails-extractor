@@ -8,36 +8,48 @@ import logging
 logger = logging.getLogger(__name__)
 
 class ApplicationProcessor:
-    def __init__(self, session: Session):
+    def __init__(self, session: Session, config: dict = None):
         self.session = session
+        self.config = config or {}
 
     def _normalize_company(self, name: str) -> str:
         """
         Normalize company name for fuzzy matching.
-        Removes legal suffixes (GmbH, AG, Inc, etc.) and locations (Germany, Berlin, etc.).
+        Removes legal suffixes (GmbH, AG, Inc, etc.) and locations (Germany, Berlin, etc.) 
+        at the end of the string to avoid over-stripping.
         """
         if not name:
             return ""
-        name = name.lower()
-        # Common suffixes to strip
-        suffixes = [
-            r'\bgmbh\b', r'\bag\b', r'\binc\b', r'\bltd\b', r'\bco\b', r'\bkg\b', r'\bplc\b',
-            r'\bse\b', r'\bcorp\b', r'\bcorporation\b', r'\bholding\b', r'\bgroup\b',
-            r'\bgermany\b', r'\bdeutschland\b', r'\bberlin\b', r'\beurope\b', r'\bemea\b',
-            r'\binternational\b', r'\bsolutions\b', r'\bsystems\b', r'\btechnology\b', r'\btechnologies\b'
-        ]
-        for suffix in suffixes:
-            name = re.sub(suffix, '', name)
         
-        # Remove special chars and extra whitespace
+        # 1. Lowercase and remove punctuation
+        name = name.lower()
         name = re.sub(r'[^\w\s]', '', name)
+        
+        # 2. Define suffixes to strip ONLY at the end
+        suffixes = [
+            'gmbh', 'ag', 'inc', 'ltd', 'co', 'kg', 'plc', 'se', 'corp', 'corporation', 
+            'holding', 'group', 'germany', 'deutschland', 'berlin', 'europe', 'emea', 
+            'international', 'solutions', 'systems', 'technology', 'technologies'
+        ]
+        
+        # Iteratively strip suffixes from the end
+        changed = True
+        while changed:
+            changed = False
+            name = name.strip()
+            for suffix in suffixes:
+                pattern = rf'\s+{suffix}$'
+                if re.search(pattern, name):
+                    name = re.sub(pattern, '', name)
+                    changed = True
+                    break
+        
         return name.strip()
 
     def _find_existing_application(self, data: ApplicationData, email_meta: dict) -> tuple[JobApplication | None, bool]:
         """
-        Tries to find an existing application matching the company name.
+        Tries to find an existing application matching the company name or domain.
         Returns (Application, is_active_match).
-        Prioritizes Active matches.
         """
         # 1. Get all apps
         all_apps = self.session.exec(select(JobApplication)).all()
@@ -47,35 +59,37 @@ class ApplicationProcessor:
         if email_meta.get('sender_email') and '@' in email_meta['sender_email']:
             sender_domain = email_meta['sender_email'].split('@')[1].lower()
 
-        best_match = None
-        
+        # Build list of domains to ignore for matching (generic or platform-wide)
+        ignore_domains = {'gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'icloud.com'}
+        if extraction_cfg := self.config.get('extraction'):
+            ignore_domains.update(extraction_cfg.get('platforms', []))
+        ignore_domains.update(self.config.get('skip_domains', []))
+
         # Helper to check match
         def is_match(app):
             # 1. Exact or Normalized Name Match
-            norm_app_name = self._normalize_company(app.company_name)
-            if norm_new_name and norm_app_name and norm_new_name == norm_app_name:
-                return True
-            # 2. Domain Match (if available in DB - currently strict sender_email check isn't stored as domain,
-            # but we can check sender_email if populated)
-            if app.sender_email and sender_domain:
+            if norm_new_name:
+                norm_app_name = self._normalize_company(app.company_name)
+                if norm_new_name == norm_app_name:
+                    return True
+            
+            # 2. Domain Match (if domain is unique and not a platform)
+            if app.sender_email and sender_domain and sender_domain not in ignore_domains:
                 app_domain = app.sender_email.split('@')[1].lower() if '@' in app.sender_email else ""
-                # Ignore generic domains
-                if app_domain and app_domain not in ['gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com']:
-                    if app_domain == sender_domain:
-                        return True
+                if app_domain == sender_domain:
+                    return True
             return False
 
         # First pass: Look for ACTIVE matches
         for app in all_apps:
             if app.is_active and is_match(app):
-                return app, True # Found active match, return immediately
+                return app, True
         
         # Second pass: Look for INACTIVE matches (most recent)
-        # Sort by last_updated desc
         all_apps.sort(key=lambda x: x.last_updated, reverse=True)
         for app in all_apps:
             if not app.is_active and is_match(app):
-                return app, False # Found inactive match
+                return app, False
 
         return None, False
 
@@ -93,47 +107,28 @@ class ApplicationProcessor:
 
         if is_app_active:
             # Case 2: Active Application Exists
-            # "Applied" can only happen once. If we see it again, treat as Pending.
-            # "Unknown" after Applied is Pending.
             new_status = data.status
             
             if new_status == ApplicationStatus.APPLIED:
-                # Already active, don't restart status loop. Treat as confirmation/comm.
                 new_status = ApplicationStatus.PENDING
                 if data.summary == "No summary extracted":
                     data.summary = "Application confirmation/update"
             elif new_status == ApplicationStatus.UNKNOWN:
                 new_status = ApplicationStatus.PENDING
 
-            # Check if we should update the DB status
-            # Only update if the new status is "meaningful" or advances the process
-            # But if it's PENDING, we just log it and update timestamps, usually keeping the old MAIN status?
-            # Actually, user wants "after applied... it's all PENDING".
-            # But if it's INTERVIEW, we should update.
-            # So: Update if status != PENDING and != APPLIED (handled above)
-            
-            # Refined: If new_status is PENDING, we generally keep the OLD status (e.g. keep "Applied" or "Interview")
-            # unless the old status was Unknown.
-            
             final_status_for_db = existing_app.status
             if new_status not in [ApplicationStatus.PENDING, ApplicationStatus.UNKNOWN]:
                 final_status_for_db = new_status
             
-            # Update the app
             self._update_application(existing_app, data, email_meta, email_timestamp, override_status=final_status_for_db)
 
         else:
             # Case 3: Inactive (Rejected) Application Exists
-            # User: "After absage it can be PENDING more and application as well"
             if data.status == ApplicationStatus.APPLIED:
-                # Re-application -> Create NEW active application
                 self._create_application(data, email_meta, email_timestamp)
             elif data.status in [ApplicationStatus.INTERVIEW, ApplicationStatus.ASSESSMENT, ApplicationStatus.OFFER]:
-                # Strong signal -> Start NEW active application (Revival?)
                 self._create_application(data, email_meta, email_timestamp)
             else:
-                # PENDING/Unknown/Rejected -> Append to the inactive log (don't re-activate)
-                # Just log the event to history, update last_updated, keep inactive.
                 self._update_application(existing_app, data, email_meta, email_timestamp, override_status=existing_app.status)
 
 
@@ -141,11 +136,10 @@ class ApplicationProcessor:
         new_app = JobApplication(
             company_name=data.company_name,
             position=data.position or "Unknown Position",
-            status=data.status if data.status != ApplicationStatus.UNKNOWN else ApplicationStatus.APPLIED, # Default to Applied if unknown at start
+            status=data.status if data.status != ApplicationStatus.UNKNOWN else ApplicationStatus.APPLIED,
             is_active=not data.is_rejection,
             created_at=timestamp,
             last_updated=timestamp,
-            # Required fields
             email_id=meta.get('id'),
             email_subject=meta.get('subject', 'No Subject'),
             email_snippet=meta.get('snippet'),
@@ -167,14 +161,10 @@ class ApplicationProcessor:
         old_status = app.status
         new_status = override_status if override_status else data.status
         
-        # Update main record
         app.status = new_status
         
-        # Only update last_updated if this email is actually newer than what we have
-        # Or if it's an important status change even if dates are weird? No, trust timestamp.
         if timestamp >= app.last_updated:
             app.last_updated = timestamp
-            # Update latest email info
             app.email_id = meta.get('id', app.email_id)
             app.email_subject = meta.get('subject', app.email_subject)
             app.email_snippet = meta.get('snippet', app.email_snippet)
@@ -183,18 +173,14 @@ class ApplicationProcessor:
             app.sender_email = meta.get('sender_email', app.sender_email)
             
         if data.is_rejection:
-            app.is_active = False # Close the process
+            app.is_active = False
         
-        # Update position if we found a better one and didn't have one
         if data.position and (app.position == "Unknown Position" or not app.position):
             app.position = data.position
             
         self.session.add(app)
         self.session.commit()
 
-        # Add entry to history timeline
-        # Use data.status for the event log to record what THIS specific email was,
-        # even if it didn't change the main app status (e.g. PENDING).
         event_status = data.status 
         if event_status == ApplicationStatus.UNKNOWN:
             event_status = ApplicationStatus.PENDING

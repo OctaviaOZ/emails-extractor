@@ -154,10 +154,11 @@ status_keywords:
 
 # Report settings
 report_mapping:
-  Applied: "Beworben"
-  Rejected: "Absage"
-  Interview: "Vorstellungsgespräch"
-  Assessment: "Eignungstest"
-  Offer: "Vertragsangebot"
-  Unknown: "Unbekannt"
-  Communication: "Kommunikation"
+  APPLIED: "Beworben"
+  REJECTED: "Absage"
+  INTERVIEW: "Vorstellungsgespräch"
+  ASSESSMENT: "Eignungstest"
+  OFFER: "Vertragsangebot"
+  UNKNOWN: "Unbekannt"
+  PENDING: "Laufend"
+  COMMUNICATION: "Kommunikation"
