@@ -52,7 +52,7 @@ from app.services.gmail import get_gmail_service, get_message_body
 from app.services.extractor import EmailExtractor, ApplicationData
 from app.services.processor import ApplicationProcessor
 from app.services.report import generate_pdf_report, generate_word_report
-from app.models import JobApplication, ApplicationStatus, ProcessedEmail, ApplicationEvent
+from app.models import JobApplication, ApplicationStatus, ProcessedEmail, ApplicationEventLog
 
 # --- Load Environment Variables ---
 load_dotenv(os.path.join(base_dir, ".env"))

@@ -8,6 +8,7 @@ class ApplicationStatus(str, Enum):
     INTERVIEW = "INTERVIEW"
     ASSESSMENT = "ASSESSMENT"
     PENDING = "PENDING"
+    COMMUNICATION = "COMMUNICATION"
     OFFER = "OFFER"
     REJECTED = "REJECTED"
     UNKNOWN = "UNKNOWN"
@@ -17,11 +18,26 @@ STATUS_RANK = {
     ApplicationStatus.UNKNOWN: 0,
     ApplicationStatus.APPLIED: 1,
     ApplicationStatus.PENDING: 2,
+    ApplicationStatus.COMMUNICATION: 2, # Same rank as Pending
     ApplicationStatus.ASSESSMENT: 3,
     ApplicationStatus.INTERVIEW: 4,
     ApplicationStatus.REJECTED: 5,
     ApplicationStatus.OFFER: 6
 }
+
+class ApplicationEventLog(SQLModel, table=True):
+    """Stores the start-to-end history of an application."""
+    __table_args__ = {"extend_existing": True}
+    id: Optional[int] = Field(default=None, primary_key=True)
+    application_id: int = Field(foreign_key="jobapplication.id")
+    
+    event_date: datetime = Field(default_factory=datetime.utcnow)
+    old_status: Optional[ApplicationStatus] = None
+    new_status: ApplicationStatus
+    summary: str # The specific update from this email
+    email_subject: str
+    
+    application: Optional["JobApplication"] = Relationship(back_populates="history")
 
 class JobApplication(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
@@ -54,21 +70,7 @@ class JobApplication(SQLModel, table=True):
     day: int
     
     # Relationship to history
-    history: List["ApplicationEvent"] = Relationship(back_populates="application")
-
-class ApplicationEvent(SQLModel, table=True):
-    """Stores the start-to-end history of an application."""
-    __table_args__ = {"extend_existing": True}
-    id: Optional[int] = Field(default=None, primary_key=True)
-    application_id: int = Field(foreign_key="jobapplication.id")
-    
-    event_date: datetime = Field(default_factory=datetime.utcnow)
-    old_status: Optional[ApplicationStatus] = None
-    new_status: ApplicationStatus
-    summary: str # The specific update from this email
-    email_subject: str
-    
-    application: Optional[JobApplication] = Relationship(back_populates="history")
+    history: List[ApplicationEventLog] = Relationship(back_populates="application")
 
 class ProcessedEmail(SQLModel, table=True):
     """Tracks every email ID we have analyzed to prevent double processing."""

@@ -94,12 +94,15 @@ class LocalProvider(LLMProvider):
             "You are an expert recruiter AI. Analyze the job email and output ONLY valid JSON.\n"
             "Fields: company_name, position (nullable), status, summary, is_rejection (bool), next_step (nullable).\n"
             "Status MUST be one of: Applied, Interview, Assessment, Offer, Rejected, Pending.\n"
+            "IMPORTANT COMPANY IDENTIFICATION:\n"
+            "- Look for the actual employer name in the SENDER NAME and EMAIL SIGNATURE (e.g. 'DKB Hiring Team' means company is DKB).\n"
+            "- IGNORE generic platform names in the email address (e.g. if sender is 'system@successfactors.eu', the company is NOT Successfactors).\n"
+            "- Be precise: 'Richemont Careers' means company is Richemont.\n"
             "IMPORTANT CLASSIFICATION RULES:\n"
-            "- 'Rejected': Includes polite rejections, feedback after interview saying 'no', or suggestions to apply for other/lower-level roles.\n"
-            "- 'Offer': ONLY for positive job offers, contracts, or intent to hire for the current position.\n"
+            "- 'Rejected': Includes polite rejections, feedback after interview saying 'no', or suggestions to apply for other roles.\n"
             "- 'Assessment': For tests, tasks, Arbeitsproben.\n"
             "- Summary: Short (max 10 words), abstractive, keep same language as email.\n"
-            "If the email says 'look at our job board for other roles' or 'not for this position', it is REJECTED."
+            "Respond ONLY with JSON."
         )
         
         # Reduce body length to 3500 chars to fit in 2048 context window (approx 1000 tokens for body)
@@ -295,7 +298,7 @@ class EmailExtractor:
             return data
 
         # For other statuses, only override "weak" or "unknown" ones
-        weak_statuses = [ApplicationStatus.APPLIED, ApplicationStatus.PENDING, ApplicationStatus.UNKNOWN]
+        weak_statuses = [ApplicationStatus.APPLIED, ApplicationStatus.PENDING, ApplicationStatus.COMMUNICATION, ApplicationStatus.UNKNOWN]
         if data.status not in weak_statuses:
             return data
 

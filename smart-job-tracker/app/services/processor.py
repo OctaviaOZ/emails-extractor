@@ -54,29 +54,40 @@ class ApplicationProcessor:
         # 1. Get all apps
         all_apps = self.session.exec(select(JobApplication)).all()
         
-        norm_new_name = self._normalize_company(data.company_name)
+        new_company_name = data.company_name
+        norm_new_name = self._normalize_company(new_company_name)
+        
         sender_domain = ""
         if email_meta.get('sender_email') and '@' in email_meta['sender_email']:
             sender_domain = email_meta['sender_email'].split('@')[1].lower()
 
-        # Build list of domains to ignore for matching (generic or platform-wide)
-        ignore_domains = {'gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'icloud.com'}
+        # Platforms and generic domains should NEVER be used for matching
+        generic_domains = {'gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'icloud.com', 'me.com', 'live.com'}
+        platforms = []
         if extraction_cfg := self.config.get('extraction'):
-            ignore_domains.update(extraction_cfg.get('platforms', []))
-        ignore_domains.update(self.config.get('skip_domains', []))
+            platforms = extraction_cfg.get('platforms', [])
+        
+        # Check if the sender domain belongs to a platform
+        is_platform_domain = any(p in sender_domain for p in platforms) or sender_domain in generic_domains
 
         # Helper to check match
         def is_match(app):
-            # 1. Exact or Normalized Name Match
-            if norm_new_name:
-                norm_app_name = self._normalize_company(app.company_name)
-                if norm_new_name == norm_app_name:
-                    return True
+            norm_app_name = self._normalize_company(app.company_name)
             
-            # 2. Domain Match (if domain is unique and not a platform)
-            if app.sender_email and sender_domain and sender_domain not in ignore_domains:
+            # 1. Name Match (Strongest)
+            if norm_new_name and norm_app_name and norm_new_name == norm_app_name:
+                return True
+            
+            # 2. Domain Match (Fallback - ONLY if not a platform and names aren't contradictory)
+            if not is_platform_domain and app.sender_email and sender_domain:
                 app_domain = app.sender_email.split('@')[1].lower() if '@' in app.sender_email else ""
-                if app_domain == sender_domain:
+                if app_domain == sender_domain and app_domain not in generic_domains:
+                    # Additional safety: If names are both known and very different, don't match by domain
+                    # e.g. "Company A" and "Company B" both using a private shared mail server? Unlikely but safer.
+                    if norm_new_name and norm_app_name:
+                        # Simple inclusion check as a heuristic
+                        if norm_new_name not in norm_app_name and norm_app_name not in norm_new_name:
+                            return False
                     return True
             return False
 
