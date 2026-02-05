@@ -25,18 +25,26 @@ try:
     # that standard jinja2 environments don't recognize, causing a crash on load.
     # We patch the Formatter to be lenient and fallback to ChatML if metadata is broken.
     class LenientJinja2ChatFormatter(llama_chat_format.Jinja2ChatFormatter):
-        def __init__(self, template: str, eos_token: str, bos_token: str):
+        def __init__(self, template: str, eos_token: str, bos_token: str, **kwargs):
             try:
-                super().__init__(template, eos_token, bos_token)
+                super().__init__(template, eos_token, bos_token, **kwargs)
             except Exception as e:
                 logging.getLogger(__name__).warning(f"Failed to parse model chat template: {e}. Falling back to generic ChatML.")
                 # Fallback template (ChatML style)
                 self._environment = None
                 self._template = None
                 self.template = "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{{'<|im_start|>assistant\n'}}"
-                # Re-try init with safe template if possible, or just mock what's needed
+                self.eos_token = eos_token
+                self.bos_token = bos_token
+                # Try to init with safe values, ignoring extra args that might have caused issues if they were template-related
                 try:
-                    super().__init__(self.template, eos_token, bos_token)
+                    # We manually set the attributes that super().__init__ would set, to avoid re-triggering the failure
+                    if hasattr(llama_chat_format, "jinja2"):
+                        self._environment = llama_chat_format.jinja2.Environment(
+                            loader=llama_chat_format.jinja2.BaseLoader(),
+                            undefined=llama_chat_format.jinja2.StrictUndefined
+                        )
+                        self._template = self._environment.from_string(self.template)
                 except:
                     pass # Absolute worst case
 
