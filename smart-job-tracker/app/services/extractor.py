@@ -17,7 +17,7 @@ import google.generativeai as genai
 
 # Try to import llama_cpp for local provider
 try:
-    from llama_cpp import Llama
+    from llama_cpp import Llama, LlamaGrammar
     import llama_cpp.llama_chat_format as llama_chat_format
     
     # --- MONKEY PATCH FOR BROKEN GGUF TEMPLATES ---
@@ -78,7 +78,14 @@ class ApplicationData(BaseModel):
             
             # Fix Status
             status_val = data.get('status')
-            if not status_val or status_val not in [s.value for s in ApplicationStatus]:
+            if status_val:
+                status_upper = str(status_val).upper().strip()
+                valid_values = [s.value for s in ApplicationStatus]
+                if status_upper in valid_values:
+                    data['status'] = ApplicationStatus(status_upper)
+                else:
+                    data['status'] = ApplicationStatus.UNKNOWN
+            else:
                 data['status'] = ApplicationStatus.UNKNOWN
             
             # Fix Summary
@@ -118,10 +125,10 @@ class LocalProvider(LLMProvider):
             # Base configuration
             kwargs = {
                 "model_path": model_path,
-                "n_ctx": 2048,
-                "n_threads": 2,
+                "n_ctx": 4096, # Increased context for better extraction
+                "n_threads": 4, # Slightly more threads for speed, safe for most laptops
                 "n_gpu_layers": 0,
-                "n_batch": 64,
+                "n_batch": 512, # Increased batch for better throughput
                 "verbose": False
             }
             
@@ -206,7 +213,11 @@ class LocalProvider(LLMProvider):
             "Respond ONLY with valid JSON."
         )
         
-        user_content = f"Sender: {sender}\nSubject: {subject}\nBody: {body[:2500]}"
+        user_content = f"Sender: {sender}\nSubject: {subject}\nBody: {body[:4000]}" # Increased for better extraction
+        
+        # Create explicit GBNF grammar from the Pydantic schema
+        schema_json = json.dumps(ApplicationData.model_json_schema())
+        grammar = LlamaGrammar.from_json_schema(schema_json)
         
         response = self.llm.create_chat_completion(
             messages=[
@@ -214,7 +225,8 @@ class LocalProvider(LLMProvider):
                 {"role": "user", "content": user_content}
             ],
             max_tokens=512,
-            temperature=0.1
+            temperature=0.1,
+            grammar=grammar
         )
         
         text = response['choices'][0]['message']['content']
