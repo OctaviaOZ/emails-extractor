@@ -90,7 +90,7 @@ class ApplicationData(BaseModel):
             
             # Fix Summary
             if not data.get('summary') or data.get('summary') == "No summary extracted":
-                data['summary'] = None # Allow field required fallback logic
+                data['summary'] = "No summary provided"
                 
             # Fix Rejection
             if data.get('is_rejection') is None:

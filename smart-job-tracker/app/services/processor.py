@@ -122,7 +122,7 @@ class ApplicationProcessor:
             
             if new_status == ApplicationStatus.APPLIED:
                 new_status = ApplicationStatus.PENDING
-                if data.summary == "No summary extracted":
+                if not data.summary or data.summary == "No summary extracted":
                     data.summary = "Application confirmation/update"
             elif new_status == ApplicationStatus.UNKNOWN:
                 new_status = ApplicationStatus.PENDING
@@ -204,7 +204,7 @@ class ApplicationProcessor:
             application_id=app_id,
             old_status=old_s,
             new_status=new_s,
-            summary=summary,
+            summary=summary or "No summary provided",
             email_subject=subject,
             event_date=timestamp
         )

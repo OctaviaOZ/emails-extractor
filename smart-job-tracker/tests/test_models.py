@@ -19,5 +19,5 @@ def test_job_application_creation():
     assert app.email_id == "gmail_123"
 
 def test_application_status_enum():
-    assert ApplicationStatus.APPLIED == "Applied"
-    assert ApplicationStatus.REJECTED == "Rejected"
+    assert ApplicationStatus.APPLIED == "APPLIED"
+    assert ApplicationStatus.REJECTED == "REJECTED"
