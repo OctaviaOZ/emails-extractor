@@ -19,16 +19,32 @@ import google.generativeai as genai
 try:
     from llama_cpp import Llama
     import llama_cpp.llama_chat_format as llama_chat_format
+    
+    # --- MONKEY PATCH FOR BROKEN GGUF TEMPLATES ---
+    # Many newer models (like SmolLM3) use custom Jinja tags (e.g. 'generation') 
+    # that standard jinja2 environments don't recognize, causing a crash on load.
+    # We patch the Formatter to be lenient and fallback to ChatML if metadata is broken.
+    class LenientJinja2ChatFormatter(llama_chat_format.Jinja2ChatFormatter):
+        def __init__(self, template: str, eos_token: str, bos_token: str):
+            try:
+                super().__init__(template, eos_token, bos_token)
+            except Exception as e:
+                logging.getLogger(__name__).warning(f"Failed to parse model chat template: {e}. Falling back to generic ChatML.")
+                # Fallback template (ChatML style)
+                self._environment = None
+                self._template = None
+                self.template = "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{{'<|im_start|>assistant\n'}}"
+                # Re-try init with safe template if possible, or just mock what's needed
+                try:
+                    super().__init__(self.template, eos_token, bos_token)
+                except:
+                    pass # Absolute worst case
+
+    # Apply the patch
+    llama_chat_format.Jinja2ChatFormatter = LenientJinja2ChatFormatter
+    
 except ImportError:
     Llama = None
-    llama_chat_format = None
-
-# Try to import jinja2 for patching broken model templates
-try:
-    import jinja2
-    from jinja2.ext import Extension
-except ImportError:
-    jinja2 = None
 
 logger = logging.getLogger(__name__)
 
