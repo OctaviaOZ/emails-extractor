@@ -80,7 +80,7 @@ class ApplicationData(BaseModel):
             status_val = data.get('status')
             if status_val:
                 status_upper = str(status_val).upper().strip()
-                valid_values = [s.value for s in ApplicationStatus]
+                valid_values = ApplicationStatus.all_values()
                 if status_upper in valid_values:
                     data['status'] = ApplicationStatus(status_upper)
                 else:
@@ -125,10 +125,10 @@ class LocalProvider(LLMProvider):
             # Base configuration
             kwargs = {
                 "model_path": model_path,
-                "n_ctx": 4096, # Increased context for better extraction
-                "n_threads": 4, # Slightly more threads for speed, safe for most laptops
+                "n_ctx": 2048, 
+                "n_threads": 2, # Reduced to 2 threads to prevent UI starvation (from OPTIMIZATION_LOG)
                 "n_gpu_layers": 0,
-                "n_batch": 512, # Increased batch for better throughput
+                "n_batch": 64, # Reduced to 64 to avoid OOM on 8GB RAM systems (from OPTIMIZATION_LOG)
                 "verbose": False
             }
             
@@ -213,7 +213,7 @@ class LocalProvider(LLMProvider):
             "Respond ONLY with valid JSON."
         )
         
-        user_content = f"Sender: {sender}\nSubject: {subject}\nBody: {body[:4000]}" # Increased for better extraction
+        user_content = f"Sender: {sender}\nSubject: {subject}\nBody: {body[:3500]}" # Truncated to fit in 2048 ctx (from OPTIMIZATION_LOG)
         
         # Create explicit GBNF grammar from the Pydantic schema
         schema_json = json.dumps(ApplicationData.model_json_schema())

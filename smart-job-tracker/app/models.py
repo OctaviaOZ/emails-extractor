@@ -13,6 +13,10 @@ class ApplicationStatus(str, Enum):
     REJECTED = "REJECTED"
     UNKNOWN = "UNKNOWN"
 
+    @classmethod
+    def all_values(cls) -> List[str]:
+        return [s.value for s in cls]
+
 # Define the progression order - higher rank updates lower rank
 STATUS_RANK = {
     ApplicationStatus.UNKNOWN: 0,
