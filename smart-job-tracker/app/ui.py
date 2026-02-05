@@ -51,8 +51,9 @@ logger = logging.getLogger(__name__)
 from app.services.gmail import get_gmail_service, get_message_body
 from app.services.extractor import EmailExtractor, ApplicationData
 from app.services.processor import ApplicationProcessor
+from app.services.sync import SyncService
 from app.services.report import generate_pdf_report, generate_word_report
-from app.models import JobApplication, ApplicationStatus, ProcessedEmail, ApplicationEventLog
+from app.models import JobApplication, ApplicationStatus, ProcessedEmail, ApplicationEventLog, Company, ProcessingLog
 
 # --- Load Environment Variables ---
 load_dotenv(os.path.join(base_dir, ".env"))
@@ -79,7 +80,6 @@ def sync_emails(engine):
     config = load_config()
     start_date = config.get('start_date', '2025-01-01')
     label_name = config.get('label_name', 'apply')
-    skip_emails = config.get('skip_emails', [])
     scopes = config.get('scopes', [])
     
     gmail_date = start_date.replace('-', '/')
@@ -94,145 +94,45 @@ def sync_emails(engine):
         return
 
     query = f"label:{label_name} after:{gmail_date}"
-    messages = []
-    
-    with st.spinner("Fetching message list..."):
-        try:
-            request = service.users().messages().list(userId='me', q=query)
-            while request is not None:
-                response = request.execute()
-                messages.extend(response.get('messages', []))
-                request = service.users().messages().list_next(request, response)
-        except Exception as e:
-            st.error(f"Failed to fetch messages: {e}")
-            logger.error(f"Failed to fetch messages: {e}")
-            return
-    
-    if not messages:
-        st.info(f"No messages found.")
-        logger.info("No messages found.")
-        return
-    
-    # Sort messages by internalDate ascending so we process the history in order
-    messages.reverse()
-
-    extractor = EmailExtractor(config=config)
-    new_emails_count = 0
-    errors_count = 0
     
     progress_bar = st.progress(0)
     status_text = st.empty()
-    total_msgs = len(messages)
-    
-    skip_domains = config.get('skip_domains', [])
-    
-    logger.info(f"Processing {total_msgs} messages")
-    
-    for i, msg in enumerate(messages):
-        msg_id = msg['id']
-        
-        try:
-            with Session(engine) as session:
-                # Check if this specific email has been processed
-                processed = session.get(ProcessedEmail, msg_id)
-                if processed:
-                    progress_bar.progress((i + 1) / total_msgs)
-                    continue
-                
-                logger.info(f"Processing message ID: {msg_id}")
-                full_msg = get_message_body(service, msg_id)
-                if not full_msg:
-                    logger.warning(f"Could not retrieve body for message {msg_id}")
-                    continue
 
-                # Skip restricted senders or domains
-                sender_full = full_msg.get('sender', '')
-                sender_name = ""
-                sender_email = sender_full
-                
-                if '<' in sender_full:
-                    match = re.match(r'^(.*?)\s*<(.+)>', sender_full)
-                    if match:
-                        sender_name, sender_email = match.groups()
-                        sender_name = sender_name.strip().replace('"', '')
-                        sender_email = sender_email.strip()
+    def progress_callback(ratio, message):
+        progress_bar.progress(ratio)
+        status_text.text(message)
 
-                should_skip = False
-                if any(email.lower() in sender_email.lower() for email in skip_emails):
-                    should_skip = True
-                elif any(domain.lower() in sender_email.lower() for domain in skip_domains):
-                    should_skip = True
-                    
-                if should_skip:
-                    session.add(ProcessedEmail(email_id=msg_id, company_name="Skipped"))
-                    session.commit()
-                    progress_bar.progress((i + 1) / total_msgs)
-                    logger.info(f"Skipped {sender_email}")
-                    continue
+    try:
+        extractor = EmailExtractor(config=config)
+        with Session(engine) as session:
+            sync_service = SyncService(session, config, extractor)
+            new_count, err_count = sync_service.run_sync(
+                service=service, 
+                query=query, 
+                progress_callback=progress_callback
+            )
+            
+            status_text.empty()
+            if err_count > 0:
+                st.warning(f"Sync complete with {err_count} errors. Processed {new_count} new emails.")
+            else:
+                st.success(f"Sync complete. Processed {new_count} new emails.")
+            
+    except Exception as e:
+        st.error(f"Sync failed: {e}")
+        logger.error(f"Sync failed: {e}", exc_info=True)
 
-                # Parse Date - Use internalDate if available for precision
-                email_dt = datetime.now()
-                if full_msg.get('internalDate'):
-                    try:
-                        email_dt = datetime.fromtimestamp(int(full_msg['internalDate']) / 1000.0)
-                    except: pass
-                elif full_msg.get('date'):
-                    try:
-                        email_dt = parser.parse(full_msg['date']).replace(tzinfo=None)
-                    except: pass
 
-                # Extract Data
-                data = extractor.extract(full_msg['subject'], full_msg['sender'], full_msg['text'], full_msg['html'])
-                
-                # Check if data is valid ApplicationData object
-                if not data or data.company_name == "Unknown":
-                    session.add(ProcessedEmail(email_id=msg_id, company_name="Unknown"))
-                    session.commit()
-                    progress_bar.progress((i + 1) / total_msgs)
-                    logger.info(f"Unknown company for message {msg_id}")
-                    continue
-
-                # --- USE PROCESSOR HERE ---
-                processor = ApplicationProcessor(session, config=config)
-                email_meta = {
-                    'subject': full_msg['subject'],
-                    'year': email_dt.year,
-                    'month': email_dt.month,
-                    'day': email_dt.day,
-                    'sender_name': sender_name,
-                    'sender_email': sender_email,
-                    'snippet': full_msg.get('snippet'),
-                    'id': msg_id # Pass ID for the new field
-                }
-                processor.process_extraction(data, email_meta, email_timestamp=email_dt)
-                
-                # Mark email as processed
-                session.add(ProcessedEmail(email_id=msg_id, company_name=data.company_name))
-                session.commit()
-                new_emails_count += 1
-                
-                status_text.text(f"Processing: {data.company_name}...")
-                progress_bar.progress((i + 1) / total_msgs)
-                logger.info(f"Successfully processed {data.company_name}")
-                
-        except Exception as e:
-            logger.error(f"Error processing message {msg_id}: {e}", exc_info=True)
-            errors_count += 1
-            progress_bar.progress((i + 1) / total_msgs)
-            continue
-    
-    status_text.empty()
-    if errors_count > 0:
-        st.warning(f"Sync complete with {errors_count} errors. Processed {new_emails_count} new emails.")
-    else:
-        st.success(f"Sync complete. Processed {new_emails_count} new emails.")
-    logger.info(f"Sync complete. {new_emails_count} new, {errors_count} errors.")
+def save_config(config):
+    config_path = os.path.join(os.path.dirname(base_dir), "config.yaml")
+    with open(config_path, 'w') as f:
+        yaml.safe_dump(config, f, default_flow_style=False)
 
 def main():
     st.set_page_config(page_title="Job Tracker", page_icon="💼", layout="wide")
     st.title("💼 Smart Job Application Tracker")
     
-    # Database Initialization
+    # ... (Database Initialization same as before) ...
     db_url = os.environ.get("DATABASE_URL", "postgresql:///job_tracker")
     engine = create_engine(db_url, pool_pre_ping=True)
     create_db_and_tables(engine)
@@ -332,30 +232,35 @@ def main():
         
         col_c1, col_c2 = st.columns(2)
         with col_c1:
-            if st.button("🧹 Clear Cache"):
-                try:
-                    with Session(engine) as session:
-                        session.exec(delete(ProcessedEmail))
-                        session.commit()
-                    st.success("Cache cleared!")
-                except Exception as e:
-                    st.error(f"Error: {e}")
+            with st.popover("🧹 Clear Cache"):
+                st.warning("This will re-process emails on the next sync.")
+                if st.button("Confirm Clear"):
+                    try:
+                        with Session(engine) as session:
+                            session.exec(delete(ProcessedEmail))
+                            session.commit()
+                        st.toast("Cache cleared!", icon="🧹")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
 
         with col_c2:
-            if st.button("⚠️ Reset DB"):
-                try:
-                    with Session(engine) as session:
-                        # 1. Delete dependents and commit to free up FK constraints
-                        session.exec(delete(ApplicationEventLog)) 
-                        session.commit()
-                        
-                        # 2. Delete main records
-                        session.exec(delete(JobApplication))
-                        session.exec(delete(ProcessedEmail))
-                        session.commit()
-                    st.warning("DB cleared!")
-                except Exception as e:
-                    st.error(f"Error: {e}")
+            with st.popover("⚠️ Reset DB"):
+                st.error("PERMANENTLY DELETE ALL DATA?")
+                if st.button("YES, DELETE EVERYTHING"):
+                    try:
+                        with Session(engine) as session:
+                            # Delete in order to respect Foreign Key constraints
+                            session.exec(delete(ApplicationEventLog)) 
+                            session.exec(delete(JobApplication))
+                            session.exec(delete(Company))
+                            session.exec(delete(ProcessedEmail))
+                            session.exec(delete(ProcessingLog))
+                            session.commit()
+                        st.toast("Database cleared!", icon="⚠️")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
 
     # Metrics & UI
     with Session(engine) as session:
@@ -366,121 +271,144 @@ def main():
             query = query.where(JobApplication.is_active == True)
         
         apps = session.exec(query).all()
-        
-    if not apps:
-        st.info("No applications found. Click 'Sync' to start.")
-        return
-
-    df = pd.DataFrame([a.model_dump() for a in apps])
     
+    # Initialize DataFrame once for all tabs and history view
+    df = pd.DataFrame([a.model_dump() for a in apps]) if apps else pd.DataFrame()
+        
     # --- TABS SELECTION ---
-    tab_dash, tab_kanban = st.tabs(["📊 Dashboard", "📋 Kanban Board"])
+    tab_dash, tab_kanban, tab_settings = st.tabs(["📊 Dashboard", "📋 Kanban Board", "⚙️ Settings"])
 
     with tab_dash:
-        # Display Stats
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Active Applications", len(df))
-        c2.metric("Pending", len(df[df['status'] == ApplicationStatus.PENDING]))
-        c3.metric("Interviews", len(df[df['status'] == ApplicationStatus.INTERVIEW]))
-        c4.metric("Offers", len(df[df['status'] == ApplicationStatus.OFFER]))
-        c5.metric("Rejections", len(df[df['status'] == ApplicationStatus.REJECTED]))
+        if df.empty:
+            st.info("No applications found. Click 'Sync' to start.")
+        else:
+            # Display Stats
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Active Applications", len(df))
+            c2.metric("Pending", len(df[df['status'] == ApplicationStatus.PENDING]))
+            c3.metric("Interviews", len(df[df['status'] == ApplicationStatus.INTERVIEW]))
+            c4.metric("Offers", len(df[df['status'] == ApplicationStatus.OFFER]))
+            c5.metric("Rejections", len(df[df['status'] == ApplicationStatus.REJECTED]))
 
-        # Dashboard Charts
-        col_a, col_b = st.columns(2)
-        
-        with col_a:
-            st.subheader("Process Status")
-            if not df.empty:
-                fig = px.pie(df, names='status', hole=0.4)
-                st.plotly_chart(fig, width='stretch')
-
-        with col_b:
-            st.subheader("Activity Timeline")
-            if not df.empty:
-                df['date'] = pd.to_datetime(df['last_updated']).dt.date
-                timeline = df.groupby('date').size().reset_index(name='count')
-                fig2 = px.bar(timeline, x='date', y='count')
-                st.plotly_chart(fig2, width='stretch')
-
-        st.subheader("Application Pipeline")
-        status_options = ["All"] + sorted(df['status'].unique().tolist())
-        filter_status = st.selectbox("Filter Table by Status", options=status_options)
-        
-        df_display = df.copy()
-        if filter_status != "All":
-            df_display = df_display[df_display['status'] == filter_status]
+            # Dashboard Charts
+            col_a, col_b = st.columns(2)
             
-        df_display['Applied Date'] = pd.to_datetime(df_display['created_at']).dt.strftime('%Y-%m-%d')
-        df_display['Last Update'] = pd.to_datetime(df_display['last_updated']).dt.strftime('%Y-%m-%d')
-        
-        # Display main table
-        selection = st.dataframe(
-            df_display[['Applied Date', 'company_name', 'position', 'status', 'Last Update', 'summary']].sort_values(by='Last Update', ascending=False),
-            width='stretch',
-            hide_index=True,
-            height=400,
-            selection_mode="single-row",
-            on_select="rerun" 
-        )
+            with col_a:
+                st.subheader("Process Status")
+                if not df.empty:
+                    fig = px.pie(df, names='status', hole=0.4)
+                    st.plotly_chart(fig, width='stretch')
+
+            with col_b:
+                st.subheader("Activity Timeline")
+                if not df.empty:
+                    df['date'] = pd.to_datetime(df['last_updated']).dt.date
+                    timeline = df.groupby('date').size().reset_index(name='count')
+                    fig2 = px.bar(timeline, x='date', y='count')
+                    st.plotly_chart(fig2, width='stretch')
+
+            st.subheader("Application Pipeline")
+            status_options = ["All"] + sorted(df['status'].unique().tolist())
+            filter_status = st.selectbox("Filter Table by Status", options=status_options)
+            
+            df_display = df.copy()
+            if filter_status != "All":
+                df_display = df_display[df_display['status'] == filter_status]
+                
+            df_display['Applied Date'] = pd.to_datetime(df_display['created_at']).dt.strftime('%Y-%m-%d')
+            df_display['Last Update'] = pd.to_datetime(df_display['last_updated']).dt.strftime('%Y-%m-%d')
+            
+            # Display main table
+            selection = st.dataframe(
+                df_display[['Applied Date', 'company_name', 'position', 'status', 'Last Update', 'summary']].sort_values(by='Last Update', ascending=False),
+                width='stretch',
+                hide_index=True,
+                height=400,
+                selection_mode="single-row",
+                on_select="rerun" 
+            )
 
     with tab_kanban:
-        st.subheader("Visual Pipeline")
+        if not apps:
+            st.info("No applications found.")
+        else:
+            # ... (rest of kanban logic) ...
+            st.subheader("Visual Pipeline")
+            
+            # Define Kanban columns (exclude UNKNOWN for clean view)
+            kanban_statuses = [
+                ApplicationStatus.APPLIED,
+                ApplicationStatus.PENDING,
+                ApplicationStatus.ASSESSMENT,
+                ApplicationStatus.INTERVIEW,
+                ApplicationStatus.OFFER,
+                ApplicationStatus.REJECTED
+            ]
+            
+            cols = st.columns(len(kanban_statuses))
+            
+            for i, status in enumerate(kanban_statuses):
+                with cols[i]:
+                    st.markdown(f"### {status.value}")
+                    # Filter apps for this column
+                    status_apps = [a for a in apps if a.status == status]
+                    
+                    for app in status_apps:
+                        with st.container(border=True):
+                            st.markdown(f"**{app.company_name}**")
+                            st.caption(f"{app.position}")
+                            if app.summary:
+                                st.markdown(f"<small>{app.summary[:60]}...</small>", unsafe_allow_html=True)
+                            
+                            # Status change trigger
+                            new_status_val = st.selectbox(
+                                "Move to:",
+                                options=[s.value for s in kanban_statuses],
+                                index=[s.value for s in kanban_statuses].index(status.value),
+                                key=f"move_{app.id}_{app.status}"
+                            )
+                            
+                            if new_status_val != status.value:
+                                # Trigger update
+                                with Session(engine) as session:
+                                    db_app = session.get(JobApplication, app.id)
+                                    if db_app:
+                                        old_s = db_app.status
+                                        db_app.status = ApplicationStatus(new_status_val)
+                                        db_app.last_updated = datetime.utcnow()
+                                        
+                                        # Log manual event
+                                        event = ApplicationEventLog(
+                                            application_id=db_app.id,
+                                            old_status=old_s,
+                                            new_status=db_app.status,
+                                            summary="Status manually updated by user",
+                                            email_subject="Manual Update",
+                                            event_date=db_app.last_updated
+                                        )
+                                        session.add(db_app)
+                                        session.add(event)
+                                        session.commit()
+                                        st.rerun()
+
+    with tab_settings:
+        st.subheader("⚙️ Application Settings")
+        config = load_config()
         
-        # Define Kanban columns (exclude UNKNOWN for clean view)
-        kanban_statuses = [
-            ApplicationStatus.APPLIED,
-            ApplicationStatus.PENDING,
-            ApplicationStatus.ASSESSMENT,
-            ApplicationStatus.INTERVIEW,
-            ApplicationStatus.OFFER,
-            ApplicationStatus.REJECTED
-        ]
-        
-        cols = st.columns(len(kanban_statuses))
-        
-        for i, status in enumerate(kanban_statuses):
-            with cols[i]:
-                st.markdown(f"### {status.value}")
-                # Filter apps for this column
-                status_apps = [a for a in apps if a.status == status]
-                
-                for app in status_apps:
-                    with st.container(border=True):
-                        st.markdown(f"**{app.company_name}**")
-                        st.caption(f"{app.position}")
-                        if app.summary:
-                            st.markdown(f"<small>{app.summary[:60]}...</small>", unsafe_allow_html=True)
-                        
-                        # Status change trigger
-                        new_status_val = st.selectbox(
-                            "Move to:",
-                            options=[s.value for s in kanban_statuses],
-                            index=[s.value for s in kanban_statuses].index(status.value),
-                            key=f"move_{app.id}_{app.status}"
-                        )
-                        
-                        if new_status_val != status.value:
-                            # Trigger update
-                            with Session(engine) as session:
-                                db_app = session.get(JobApplication, app.id)
-                                if db_app:
-                                    old_s = db_app.status
-                                    db_app.status = ApplicationStatus(new_status_val)
-                                    db_app.last_updated = datetime.utcnow()
-                                    
-                                    # Log manual event
-                                    event = ApplicationEventLog(
-                                        application_id=db_app.id,
-                                        old_status=old_s,
-                                        new_status=db_app.status,
-                                        summary="Status manually updated by user",
-                                        email_subject="Manual Update",
-                                        event_date=db_app.last_updated
-                                    )
-                                    session.add(db_app)
-                                    session.add(event)
-                                    session.commit()
-                                    st.rerun()
+        with st.form("settings_form"):
+            new_label = st.text_input("Gmail Label to Sync", value=config.get('label_name', 'apply'))
+            new_start_date = st.date_input("Sync Start Date", value=parser.parse(config.get('start_date', '2025-01-01')).date())
+            
+            skip_domains = config.get('skip_domains', [])
+            new_skip_domains_str = st.text_area("Domains to Skip (one per line)", value="\n".join(skip_domains))
+            
+            if st.form_submit_button("Save Settings"):
+                config['label_name'] = new_label
+                config['start_date'] = new_start_date.strftime('%Y-%m-%d')
+                config['skip_domains'] = [d.strip() for d in new_skip_domains_str.split("\n") if d.strip()]
+                save_config(config)
+                st.success("Settings saved successfully!")
+                st.rerun()
 
     # --- DRILL DOWN / HISTORY VIEW ---
     st.divider()
@@ -488,12 +416,16 @@ def main():
     
     # Determine initial selection from table click (if in dashboard tab)
     company_to_show = None
-    if 'selection' in locals() and selection and selection.selection["rows"]:
-        selected_row_idx = selection.selection["rows"][0]
-        sorted_df = df_display[['Applied Date', 'company_name', 'position', 'status', 'Last Update', 'summary']].sort_values(by='Last Update', ascending=False)
-        company_to_show = sorted_df.iloc[selected_row_idx]['company_name']
+    if not df.empty and 'company_name' in df.columns:
+        if 'selection' in locals() and selection and selection.selection["rows"]:
+            selected_row_idx = selection.selection["rows"][0]
+            sorted_df = df_display[['Applied Date', 'company_name', 'position', 'status', 'Last Update', 'summary']].sort_values(by='Last Update', ascending=False)
+            company_to_show = sorted_df.iloc[selected_row_idx]['company_name']
 
-    options = [""] + sorted(df['company_name'].unique().tolist())
+    options = [""]
+    if not df.empty and 'company_name' in df.columns:
+        options += sorted(df['company_name'].unique().tolist())
+    
     index_to_select = 0
     if company_to_show and company_to_show in options:
         index_to_select = options.index(company_to_show)

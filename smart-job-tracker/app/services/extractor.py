@@ -21,24 +21,22 @@ try:
     import llama_cpp.llama_chat_format as llama_chat_format
     
     # --- MONKEY PATCH FOR BROKEN GGUF TEMPLATES ---
-    # Many newer models (like SmolLM3) use custom Jinja tags (e.g. 'generation') 
-    # that standard jinja2 environments don't recognize, causing a crash on load.
-    # We patch the Formatter to be lenient and fallback to ChatML if metadata is broken.
     class LenientJinja2ChatFormatter(llama_chat_format.Jinja2ChatFormatter):
         def __init__(self, template: str, eos_token: str, bos_token: str, **kwargs):
+            # Pre-emptive fix: Strip {% generation %} tags which are common in new HF models
+            # but unknown to standard Jinja2 environments.
+            clean_template = template.replace("{% generation %}", "").replace("{% endgeneration %}", "")
             try:
-                super().__init__(template, eos_token, bos_token, **kwargs)
+                super().__init__(clean_template, eos_token, bos_token, **kwargs)
             except Exception as e:
-                logging.getLogger(__name__).warning(f"Failed to parse model chat template: {e}. Falling back to generic ChatML.")
+                logging.getLogger(__name__).warning(f"Failed to parse model chat template even after cleaning: {e}. Falling back to generic ChatML.")
                 # Fallback template (ChatML style)
                 self._environment = None
                 self._template = None
                 self.template = "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{{'<|im_start|>assistant\n'}}"
                 self.eos_token = eos_token
                 self.bos_token = bos_token
-                # Try to init with safe values, ignoring extra args that might have caused issues if they were template-related
                 try:
-                    # We manually set the attributes that super().__init__ would set, to avoid re-triggering the failure
                     if hasattr(llama_chat_format, "jinja2"):
                         self._environment = llama_chat_format.jinja2.Environment(
                             loader=llama_chat_format.jinja2.BaseLoader(),
@@ -46,7 +44,7 @@ try:
                         )
                         self._template = self._environment.from_string(self.template)
                 except:
-                    pass # Absolute worst case
+                    pass
 
     # Apply the patch
     llama_chat_format.Jinja2ChatFormatter = LenientJinja2ChatFormatter
@@ -78,7 +76,9 @@ class ApplicationData(BaseModel):
             
             # Fix Status
             status_val = data.get('status')
-            if status_val:
+            if isinstance(status_val, ApplicationStatus):
+                pass # Already correct
+            elif status_val:
                 status_upper = str(status_val).upper().strip()
                 valid_values = ApplicationStatus.all_values()
                 if status_upper in valid_values:
@@ -126,7 +126,7 @@ class LocalProvider(LLMProvider):
             kwargs = {
                 "model_path": model_path,
                 "n_ctx": 3072, # Middle ground between 2048 and 4096
-                "n_threads": 3, # Use 3 threads to speed up processing while keeping UI responsive
+                "n_threads": 4, # Restored to 4 for faster inference
                 "n_gpu_layers": 0,
                 "n_batch": 128, # Balanced batch size to avoid large memory spikes
                 "verbose": False
@@ -206,10 +206,17 @@ class LocalProvider(LLMProvider):
 
     def extract(self, sender: str, subject: str, body: str) -> ApplicationData:
         system_prompt = (
-            "You are a recruitment assistant. Analyze the email and extract data in JSON format.\n"
-            "Required fields: company_name (actual employer, NOT the platform), position, status, summary (max 10 words), is_rejection (bool), next_step.\n"
-            "Status values: Applied, Interview, Assessment, Offer, Rejected, Pending.\n"
-            "Example: If Richemont.NOREPLY@successfactors.eu sends an email about a job at Richemont, the company is 'Richemont'.\n"
+            "/think\n"
+            "You are a professional recruitment assistant specializing in English and German emails.\n"
+            "Your task is to analyze the provided email and extract structured data in JSON format.\n"
+            "CRITICAL: Distinguish between the 'Platform' (e.g., Workday, SuccessFactors, Greenhouse, SmartRecruiters) and the 'Employer' (the actual company you applied to).\n"
+            "REQUIRED FIELDS:\n"
+            "- company_name: The actual employer (e.g., 'Deloitte', 'Richemont'). Ignore platform names.\n"
+            "- position: Job title (e.g., 'Software Engineer'). Default to 'Unknown Position' if missing.\n"
+            "- status: One of [Applied, Interview, Assessment, Offer, Rejected, Pending].\n"
+            "- summary: A concise summary (max 12 words) of the key update. For German emails, translate the essence to English.\n"
+            "- is_rejection: Boolean. True if the email explicitly states they are not moving forward.\n"
+            "- next_step: Immediate action required or 'Wait for feedback'.\n\n"
             "Respond ONLY with valid JSON."
         )
         

@@ -44,37 +44,48 @@ class ApplicationEventLog(SQLModel, table=True):
     
     application: Optional["JobApplication"] = Relationship(back_populates="history")
 
+class Company(SQLModel, table=True):
+    __table_args__ = {"extend_existing": True}
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True)
+    domain: Optional[str] = Field(default=None, index=True)
+    
+    applications: List["JobApplication"] = Relationship(back_populates="company")
+
 class JobApplication(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
     id: Optional[int] = Field(default=None, primary_key=True)
-    # REMOVED: unique=True constraint to allow multiple apps per company
+    
+    company_id: Optional[int] = Field(default=None, foreign_key="company.id")
     company_name: str = Field(index=True) 
     position: Optional[str] = Field(default=None)
     status: ApplicationStatus = Field(default=ApplicationStatus.UNKNOWN)
     
-    # Tracking distinct processes
-    is_active: bool = Field(default=True) # False if Rejected/Withdrawn
+    # ... rest of fields ...
+    is_active: bool = Field(default=True)
     
     # Sender details
     sender_name: Optional[str] = None
     sender_email: Optional[str] = None
     
     # Dates
-    created_at: datetime = Field(default_factory=datetime.utcnow) # First email date
-    last_updated: datetime = Field(default_factory=datetime.utcnow) # Latest email date
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    last_updated: datetime = Field(default_factory=datetime.utcnow)
     
     # Latest email details
-    email_id: Optional[str] = Field(default=None) # Link to specific email ID (e.g. Gmail ID)
+    email_id: Optional[str] = Field(default=None)
+    thread_id: Optional[str] = Field(default=None, index=True)
     email_subject: str
     email_snippet: Optional[str] = None
-    summary: Optional[str] = None # Short AI or heuristic summary
+    summary: Optional[str] = None
     
     # Metadata for reporting
     year: int
     month: int
     day: int
     
-    # Relationship to history
+    # Relationships
+    company: Optional[Company] = Relationship(back_populates="applications")
     history: List[ApplicationEventLog] = Relationship(back_populates="application")
 
 class ProcessedEmail(SQLModel, table=True):

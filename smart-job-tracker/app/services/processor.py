@@ -1,7 +1,7 @@
 from sqlmodel import Session, select
 from datetime import datetime
 import re
-from app.models import JobApplication, ApplicationEventLog, ApplicationStatus
+from app.models import JobApplication, ApplicationEventLog, ApplicationStatus, STATUS_RANK, Company
 from app.services.extractor import ApplicationData
 import logging
 
@@ -13,11 +13,7 @@ class ApplicationProcessor:
         self.config = config or {}
 
     def _normalize_company(self, name: str) -> str:
-        """
-        Normalize company name for fuzzy matching.
-        Removes legal suffixes (GmbH, AG, Inc, etc.) and locations (Germany, Berlin, etc.) 
-        at the end of the string to avoid over-stripping.
-        """
+        # ... (implementation same as before) ...
         if not name:
             return ""
         
@@ -48,10 +44,17 @@ class ApplicationProcessor:
 
     def _find_existing_application(self, data: ApplicationData, email_meta: dict) -> tuple[JobApplication | None, bool]:
         """
-        Tries to find an existing application matching the company name or domain.
+        Tries to find an existing application matching the thread_id, company name, or domain.
         Returns (Application, is_active_match).
         """
-        # 1. Get all apps
+        # 1. Try Thread ID Match (Strongest - Priority 4)
+        if thread_id := email_meta.get('thread_id'):
+            stmt = select(JobApplication).where(JobApplication.thread_id == thread_id)
+            app = self.session.exec(stmt).first()
+            if app:
+                return app, app.is_active
+
+        # 2. Fallback to Name/Domain match
         all_apps = self.session.exec(select(JobApplication)).all()
         
         new_company_name = data.company_name
@@ -82,10 +85,7 @@ class ApplicationProcessor:
             if not is_platform_domain and app.sender_email and sender_domain:
                 app_domain = app.sender_email.split('@')[1].lower() if '@' in app.sender_email else ""
                 if app_domain == sender_domain and app_domain not in generic_domains:
-                    # Additional safety: If names are both known and very different, don't match by domain
-                    # e.g. "Company A" and "Company B" both using a private shared mail server? Unlikely but safer.
                     if norm_new_name and norm_app_name:
-                        # Simple inclusion check as a heuristic
                         if norm_new_name not in norm_app_name and norm_app_name not in norm_new_name:
                             return False
                     return True
@@ -118,33 +118,73 @@ class ApplicationProcessor:
 
         if is_app_active:
             # Case 2: Active Application Exists
-            new_status = data.status
+            raw_status = data.status
             
-            if new_status == ApplicationStatus.APPLIED:
-                new_status = ApplicationStatus.PENDING
+            # Normalize Applied/Unknown to Pending for existing apps to see if they are better than current
+            if raw_status in [ApplicationStatus.APPLIED, ApplicationStatus.UNKNOWN]:
+                raw_status = ApplicationStatus.PENDING
                 if not data.summary or data.summary == "No summary extracted":
                     data.summary = "Application confirmation/update"
-            elif new_status == ApplicationStatus.UNKNOWN:
-                new_status = ApplicationStatus.PENDING
 
+            # Use STATUS_RANK to ensure we only upgrade status
+            current_rank = STATUS_RANK.get(existing_app.status, 0)
+            new_rank = STATUS_RANK.get(raw_status, 0)
+            
             final_status_for_db = existing_app.status
-            if new_status not in [ApplicationStatus.PENDING, ApplicationStatus.UNKNOWN]:
-                final_status_for_db = new_status
+            if new_rank > current_rank:
+                final_status_for_db = raw_status
             
             self._update_application(existing_app, data, email_meta, email_timestamp, override_status=final_status_for_db)
 
         else:
             # Case 3: Inactive (Rejected) Application Exists
-            if data.status == ApplicationStatus.APPLIED:
-                self._create_application(data, email_meta, email_timestamp)
-            elif data.status in [ApplicationStatus.INTERVIEW, ApplicationStatus.ASSESSMENT, ApplicationStatus.OFFER]:
+            if data.status in [ApplicationStatus.APPLIED, ApplicationStatus.INTERVIEW, ApplicationStatus.ASSESSMENT, ApplicationStatus.OFFER]:
                 self._create_application(data, email_meta, email_timestamp)
             else:
                 self._update_application(existing_app, data, email_meta, email_timestamp, override_status=existing_app.status)
 
 
+    def _get_or_create_company(self, data: ApplicationData, email_meta: dict) -> Company:
+        """
+        Finds or creates a Company record.
+        """
+        name = data.company_name
+        domain = None
+        if email_meta.get('sender_email') and '@' in email_meta['sender_email']:
+            domain = email_meta['sender_email'].split('@')[1].lower()
+            generic_domains = {'gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'icloud.com', 'me.com', 'live.com'}
+            if domain in generic_domains:
+                domain = None
+
+        # 1. Try by Name (Exact)
+        stmt = select(Company).where(Company.name == name)
+        company = self.session.exec(stmt).first()
+        if company:
+            if domain and not company.domain:
+                company.domain = domain
+                self.session.add(company)
+                self.session.commit()
+            return company
+
+        # 2. Try by Domain (if not generic)
+        if domain:
+            stmt = select(Company).where(Company.domain == domain)
+            company = self.session.exec(stmt).first()
+            if company:
+                return company
+
+        # 3. Create New
+        company = Company(name=name, domain=domain)
+        self.session.add(company)
+        self.session.commit()
+        self.session.refresh(company)
+        return company
+
     def _create_application(self, data: ApplicationData, meta: dict, timestamp: datetime):
+        company = self._get_or_create_company(data, meta)
+        
         new_app = JobApplication(
+            company_id=company.id,
             company_name=data.company_name,
             position=data.position or "Unknown Position",
             status=data.status if data.status != ApplicationStatus.UNKNOWN else ApplicationStatus.APPLIED,
@@ -152,6 +192,7 @@ class ApplicationProcessor:
             created_at=timestamp,
             last_updated=timestamp,
             email_id=meta.get('id'),
+            thread_id=meta.get('thread_id'),
             email_subject=meta.get('subject', 'No Subject'),
             email_snippet=meta.get('snippet'),
             summary=data.summary,
@@ -169,6 +210,11 @@ class ApplicationProcessor:
         logger.info(f"🆕 New Application: {data.company_name}")
 
     def _update_application(self, app: JobApplication, data: ApplicationData, meta: dict, timestamp: datetime, override_status=None):
+        # Ensure company linkage if it was missing
+        if not app.company_id:
+            company = self._get_or_create_company(data, meta)
+            app.company_id = company.id
+            
         old_status = app.status
         new_status = override_status if override_status else data.status
         
@@ -192,11 +238,7 @@ class ApplicationProcessor:
         self.session.add(app)
         self.session.commit()
 
-        event_status = data.status 
-        if event_status == ApplicationStatus.UNKNOWN:
-            event_status = ApplicationStatus.PENDING
-
-        self._log_event(app.id, old_status, event_status, data.summary, meta.get('subject', 'No Subject'), timestamp)
+        self._log_event(app.id, old_status, new_status, data.summary, meta.get('subject', app.email_subject), timestamp)
         logger.info(f"🔄 Updated Application: {app.company_name} ({old_status} -> {new_status})")
 
     def _log_event(self, app_id, old_s, new_s, summary, subject, timestamp):

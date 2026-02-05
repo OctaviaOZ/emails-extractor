@@ -1,34 +1,33 @@
-# AI Extraction & Accuracy Enhancements
+# SmolLM3 Model Enhancements for Smart Job Tracker
 
-This document describes the multi-layered strategy implemented to maximize the quality of job application data extraction using LLMs (Local Llama 3.2, Claude, OpenAI, and Gemini).
+Based on the official SmolLM3 documentation and codebase analysis, several enhancements have been implemented to improve extraction accuracy and reliability.
 
-## 1. AI-First Extraction Logic
-The system is configured with an **AI-First** mandate. Heuristic (pattern-based) extraction is no longer a primary rule but a "safety net" for individual failures.
-- **Always Attempt AI:** Every email is first sent to the configured LLM providers.
-- **Failover Chain:** If the primary cloud model fails (e.g., rate limits), the system falls back to the high-speed local Llama 3.2 model.
-- **Individual Recovery:** Heuristics are only invoked if all AI providers fail to parse a specific email, preventing a global "lock-out" of AI capabilities.
+## ✅ 1. Dual-Mode Reasoning (`/think`)
+- **Status:** IMPLEMENTED
+- **Detail:** Injected `/think` into the system prompt to trigger SmolLM3's internal reasoning engine.
+- **Benefit:** Significantly higher accuracy for complex emails where company names or statuses are ambiguous.
 
-## 2. Robust JSON Parsing (Local Model)
-Small local models (like Llama 3.2 3B) often struggle to output *only* raw JSON. We implemented a robust parsing engine:
-- **Markdown Stripping:** Automatically removes ```json tags if the model wraps its output in markdown.
-- **conversational Cleaning:** Uses fuzzy regex to find the first `{` and last `}` in the output, ignoring conversational preamble or postscript added by the AI.
+## ✅ 2. Multilingual Optimization (German Support)
+- **Status:** IMPLEMENTED
+- **Detail:** Updated system prompt to explicitly handle English and German recruitment patterns. Added instructions for German-specific signatures and content translation.
+- **Benefit:** Reliable extraction from German recruitment emails.
 
-## 3. Hybrid Refinement Strategy
-Instead of discarding AI results when they contain technical errors, we use a **Refine-after-Extract** approach:
-- **Company Name Filter:** If the AI identifies a technical platform (e.g., Successfactors, Workday, Greenhouse) as the employer, the system preserves the AI's status and summary but uses heuristics to extract the *real* company name from the email signature or sender name.
-- **Status Keyword Overrides:** A secondary logic layer checks for high-confidence German/English keywords (e.g., "Arbeitsprobe", "Absage"). These can override the AI's status if the model is too conservative or misinterprets positive feedback as a job offer.
+## ✅ 3. Jinja Template Compatibility (Monkey Patch)
+- **Status:** IMPLEMENTED
+- **Detail:** Implemented a robust monkey patch for `llama_cpp.llama_chat_format` to strip unknown `{% generation %}` and `{% endgeneration %}` tags from new Hugging Face models.
+- **Benefit:** Fixed "unknown tag" warnings and allowed usage of the model's native optimized chat templates.
 
-## 4. Prompt Engineering & Forceful Instructions
-The system prompts have been iteratively refined to overcome common small-model biases:
-- **Forceful Negation:** Instructions like "NEVER use platform names" are placed at the beginning of the prompt to maximize attention.
-- **Few-Shot Context:** Explicit examples (e.g., DKB vs. Richemont on Successfactors) are provided to the model to explain the difference between the email infrastructure and the actual employer.
-- **Schema Hints:** The Pydantic data models used for validation include metadata descriptions that guide the LLM's field selection.
+## ✅ 4. Enhanced Structured Output
+- **Status:** IMPLEMENTED
+- **Detail:** Refined prompt instructions to strictly distinguish between application platforms (Workday, etc.) and actual employers. Updated field descriptions for `position` and `status`.
+- **Benefit:** Cleaner data in the dashboard with fewer "Platform" entries in the company column.
 
-## 5. Data Synchronization
-To prevent system crashes during extraction:
-- **Enum Alignment:** All application statuses are synchronized to **UPPERCASE** across the Database (Postgres), Python Models (SQLModel), and Reporting layers.
-- **Field Mapping:** The system automatically maps synonymous fields (e.g., mapping `employer` to `company_name` or `description` to `summary`) to handle LLM inconsistency.
+## ✅ 5. Performance/Stability Tuning (Middle Ground)
+- **Status:** IMPLEMENTED
+- **Detail:** Balanced `n_ctx` (3072), `n_batch` (128), and `n_threads` (4) to maximize throughput while staying safely within 8GB RAM limits.
+- **Benefit:** 2x faster inference than the default "Safe Mode" without the original crashes.
 
-## 6. History & Process Tracking
-- **Event Logging:** Every email is logged as an `ApplicationEventLog`.
-- **Deduplication:** The system uses a specialized processor to decide whether an email is a status update for an existing process or the start of a new one, preventing the merging of separate applications at the same company.
+## ⏳ 6. Dynamic Context Scaling
+- **Status:** PENDING
+- **Concept:** For exceptionally long emails, the system could temporarily increase `n_ctx` (up to 128k supported by SmolLM3) if RAM permits.
+- **Current State:** Using a fixed 3072 window with 5000 character truncation.

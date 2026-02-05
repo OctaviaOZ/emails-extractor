@@ -3,6 +3,7 @@ import pickle
 import logging
 import socket
 import ssl
+from typing import List
 from bs4 import BeautifulSoup
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -67,55 +68,7 @@ def get_message_body(service: Resource, msg_id: str) -> dict:
     """
     try:
         message = service.users().messages().get(userId='me', id=msg_id, format='full').execute()
-        
-        headers = message['payload']['headers']
-        subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
-        sender = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown')
-        date = next((h['value'] for h in headers if h['name'] == 'Date'), '')
-        snippet = message.get('snippet', '')
-        internal_date = message.get('internalDate', '')
-
-        parts = message['payload'].get('parts', [])
-        body_text = ""
-        body_html = ""
-
-        def find_parts(parts_list):
-            nonlocal body_text, body_html
-            for part in parts_list:
-                mime_type = part.get('mimeType')
-                data = part.get('body', {}).get('data')
-                if data:
-                    import base64
-                    decoded = base64.urlsafe_b64decode(data.encode('UTF-8')).decode('utf-8')
-                    if mime_type == 'text/plain':
-                        body_text += decoded
-                    elif mime_type == 'text/html':
-                        body_html += decoded
-                
-                if part.get('parts'):
-                    find_parts(part['parts'])
-        
-        if not parts and message['payload'].get('body', {}).get('data'):
-            data = message['payload']['body']['data']
-            import base64
-            decoded = base64.urlsafe_b64decode(data.encode('UTF-8')).decode('utf-8')
-            if message['payload']['mimeType'] == 'text/plain':
-                body_text = decoded
-            elif message['payload']['mimeType'] == 'text/html':
-                body_html = decoded
-
-        find_parts(parts)
-
-        return {
-            "id": msg_id,
-            "subject": subject,
-            "sender": sender,
-            "date": date,
-            "internalDate": internal_date,
-            "snippet": snippet,
-            "text": body_text,
-            "html": body_html
-        }
+        return _parse_message_response(message, msg_id)
 
     except HttpError as error:
         if error.resp.status in [429, 500, 502, 503, 504]:
@@ -126,3 +79,74 @@ def get_message_body(service: Resource, msg_id: str) -> dict:
     except Exception as e:
         logger.error(f"Unexpected error fetching message {msg_id}: {e}")
         raise e
+
+def batch_get_message_bodies(service: Resource, msg_ids: List[str]) -> List[dict]:
+    """
+    Fetches multiple message bodies in a single batch request.
+    """
+    results = []
+    
+    def callback(request_id, response, exception):
+        if exception:
+            logger.error(f"Error in batch request for {request_id}: {exception}")
+            results.append(None)
+        else:
+            # We need to manually parse the response here similar to get_message_body
+            results.append(_parse_message_response(response, request_id))
+
+    batch = service.new_batch_http_request(callback=callback)
+    for msg_id in msg_ids:
+        batch.add(service.users().messages().get(userId='me', id=msg_id, format='full'), request_id=msg_id)
+    
+    batch.execute()
+    return [r for r in results if r is not None]
+
+def _parse_message_response(message: dict, msg_id: str) -> dict:
+    """Helper to parse raw Gmail message response."""
+    headers = message['payload']['headers']
+    subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
+    sender = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown')
+    date = next((h['value'] for h in headers if h['name'] == 'Date'), '')
+    snippet = message.get('snippet', '')
+    internal_date = message.get('internalDate', '')
+
+    parts = message['payload'].get('parts', [])
+    body_text = ""
+    body_html = ""
+
+    def find_parts(parts_list):
+        nonlocal body_text, body_html
+        for part in parts_list:
+            mime_type = part.get('mimeType')
+            data = part.get('body', {}).get('data')
+            if data:
+                import base64
+                decoded = base64.urlsafe_b64decode(data.encode('UTF-8')).decode('utf-8')
+                if mime_type == 'text/plain':
+                    body_text += decoded
+                elif mime_type == 'text/html':
+                    body_html += decoded
+            if part.get('parts'):
+                find_parts(part['parts'])
+    
+    if not parts and message['payload'].get('body', {}).get('data'):
+        data = message['payload']['body']['data']
+        import base64
+        decoded = base64.urlsafe_b64decode(data.encode('UTF-8')).decode('utf-8')
+        if message['payload']['mimeType'] == 'text/plain':
+            body_text = decoded
+        elif message['payload']['mimeType'] == 'text/html':
+            body_html = decoded
+
+    find_parts(parts)
+
+    return {
+        "id": msg_id,
+        "subject": subject,
+        "sender": sender,
+        "date": date,
+        "internalDate": internal_date,
+        "snippet": snippet,
+        "text": body_text,
+        "html": body_html
+    }
