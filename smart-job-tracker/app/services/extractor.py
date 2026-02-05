@@ -125,10 +125,10 @@ class LocalProvider(LLMProvider):
             # Base configuration
             kwargs = {
                 "model_path": model_path,
-                "n_ctx": 2048, 
-                "n_threads": 2, # Reduced to 2 threads to prevent UI starvation (from OPTIMIZATION_LOG)
+                "n_ctx": 3072, # Middle ground between 2048 and 4096
+                "n_threads": 3, # Use 3 threads to speed up processing while keeping UI responsive
                 "n_gpu_layers": 0,
-                "n_batch": 64, # Reduced to 64 to avoid OOM on 8GB RAM systems (from OPTIMIZATION_LOG)
+                "n_batch": 128, # Balanced batch size to avoid large memory spikes
                 "verbose": False
             }
             
@@ -213,7 +213,7 @@ class LocalProvider(LLMProvider):
             "Respond ONLY with valid JSON."
         )
         
-        user_content = f"Sender: {sender}\nSubject: {subject}\nBody: {body[:3500]}" # Truncated to fit in 2048 ctx (from OPTIMIZATION_LOG)
+        user_content = f"Sender: {sender}\nSubject: {subject}\nBody: {body[:5000]}" # Increased truncation for 3072 ctx window
         
         # Create explicit GBNF grammar from the Pydantic schema
         schema_json = json.dumps(ApplicationData.model_json_schema())
