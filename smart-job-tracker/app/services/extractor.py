@@ -18,8 +18,17 @@ import google.generativeai as genai
 # Try to import llama_cpp for local provider
 try:
     from llama_cpp import Llama
+    import llama_cpp.llama_chat_format as llama_chat_format
 except ImportError:
     Llama = None
+    llama_chat_format = None
+
+# Try to import jinja2 for patching broken model templates
+try:
+    import jinja2
+    from jinja2.ext import Extension
+except ImportError:
+    jinja2 = None
 
 logger = logging.getLogger(__name__)
 
