@@ -27,6 +27,7 @@ STATUS_RANK = {
 
 class ApplicationEventLog(SQLModel, table=True):
     """Stores the start-to-end history of an application."""
+    __tablename__ = "applicationevent"
     __table_args__ = {"extend_existing": True}
     id: Optional[int] = Field(default=None, primary_key=True)
     application_id: int = Field(foreign_key="jobapplication.id")

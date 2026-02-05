@@ -71,25 +71,34 @@ def generate_word_report(applications, output_filename, start_date=None, end_dat
     df['last_updated'] = pd.to_datetime(df['last_updated'])
     df = df.sort_values(by='last_updated', ascending=False)
 
-    # German Mapping
-    german_mapping = {
+    # Use mapping from config or professional defaults
+    mapping = config.get('report_mapping', {}) if config else {}
+    
+    # Professional Defaults
+    default_german = {
         "APPLIED": "Beworben",
-        "INTERVIEW": "Interview",
-        "ASSESSMENT": "Assessment",
+        "INTERVIEW": "Vorstellungsgespräch",
+        "ASSESSMENT": "Eignungstest",
         "PENDING": "Laufend",
-        "OFFER": "Angebot",
-        "REJECTED": "Abgelehnt",
-        "UNKNOWN": "Unbekannt"
+        "OFFER": "Vertragsangebot",
+        "REJECTED": "Absage",
+        "UNKNOWN": "Unbekannt",
+        "COMMUNICATION": "Kommunikation"
     }
+    
+    # Merge defaults with config (config overrides)
+    active_mapping = {**default_german, **mapping}
 
     # Prepare Report Data
     report_data = []
-    status_counts = {k: 0 for k in german_mapping.values()}
+    status_counts = {v: 0 for v in active_mapping.values()}
 
     for company, group in df.groupby('company_name'):
         latest = group.iloc[0]
         interview_count = group[group['status'] == ApplicationStatus.INTERVIEW].shape[0]
-        status_label = get_status_label(latest['status'], german_mapping)
+        
+        # Get localized label
+        status_label = get_status_label(latest['status'], active_mapping)
         
         # Increment counter
         if status_label in status_counts:
@@ -181,15 +190,18 @@ def generate_word_report(applications, output_filename, start_date=None, end_dat
     doc.save(output_filename)
     return output_filename
 
-def generate_pdf_report(applications, output_filename, config=None):
+def generate_pdf_report(applications, output_filename, start_date=None, end_date=None, config=None):
     """
-    Generates a PDF report from a list of JobApplication objects.
+    Generates a PDF report from a list of JobApplication objects with date filtering.
     """
-    if not applications:
+    # Filter Data
+    filtered_apps = filter_applications_by_date(applications, start_date, end_date)
+    
+    if not filtered_apps:
         return None
 
     # Convert list of JobApplication objects to DataFrame
-    data = [app.model_dump() for app in applications]
+    data = [app.model_dump() for app in filtered_apps]
     df = pd.DataFrame(data)
 
     if df.empty:
@@ -206,15 +218,11 @@ def generate_pdf_report(applications, output_filename, config=None):
     mapping = config.get('report_mapping', {}) if config else {}
 
     # Group by company to aggregate data
-    # Note: With multi-process support, a company might appear multiple times.
-    # This report aggregates by company, showing the latest status.
     for company, group in df.groupby('company_name'):
         # Latest entry (first in sorted group) determines the current status and last contact
         latest = group.iloc[0]
         
         # Calculate Interview Count
-        # Count number of applications where status is specifically INTERVIEW
-        # Note: This is a simplified metric. Ideally we would query ApplicationEvent.
         interview_count = group[group['status'] == ApplicationStatus.INTERVIEW].shape[0]
         
         status_label = get_status_label(latest['status'], mapping)
@@ -238,12 +246,19 @@ def generate_pdf_report(applications, output_filename, config=None):
     elements = []
     
     styles = getSampleStyleSheet()
-    title = Paragraph(f"Application Report - {datetime.now().strftime('%Y-%m-%d')}", styles['Title'])
+    
+    # Date Range Title
+    title_text = f"Application Report - {datetime.now().strftime('%Y-%m-%d')}"
+    if start_date and end_date:
+        title_text = f"Application Report ({start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')})"
+    elif start_date:
+        title_text = f"Application Report (Since {start_date.strftime('%d.%m.%Y')})"
+        
+    title = Paragraph(title_text, styles['Title'])
     elements.append(title)
     elements.append(Spacer(1, 12))
 
     # Table Data
-    # Headers - customizable via config could be an enhancement, hardcoded English for now
     headers = ['Company', 'Status', 'Interviews', 'Last Contact']
     table_data = [headers]
     

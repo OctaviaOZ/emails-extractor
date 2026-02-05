@@ -264,7 +264,14 @@ def main():
                     if apps:
                         report_path = os.path.join(base_dir, "report.pdf")
                         config = load_config()
-                        generated_file = generate_pdf_report(apps, report_path, config=config)
+                        
+                        start_date = None
+                        end_date = None
+                        if isinstance(date_range, tuple):
+                            if len(date_range) > 0: start_date = date_range[0]
+                            if len(date_range) > 1: end_date = date_range[1]
+                            
+                        generated_file = generate_pdf_report(apps, report_path, start_date=start_date, end_date=end_date, config=config)
                         if generated_file:
                             st.success("PDF Generated!")
                             with open(generated_file, "rb") as file:
@@ -290,22 +297,65 @@ def main():
                             with open(generated_file, "rb") as file:
                                 st.download_button("Download DOCX", data=file, file_name="Bewerbungs_Bericht.docx")
         
+        if st.button("📥 Download Full History (CSV)"):
+            with Session(engine) as session:
+                # Fetch all events joined with application data for context
+                stmt = select(ApplicationEventLog, JobApplication).join(JobApplication)
+                results = session.exec(stmt).all()
+                
+                if results:
+                    csv_data = []
+                    for event, app in results:
+                        csv_data.append({
+                            "Company": app.company_name,
+                            "Position": app.position,
+                            "Event Date": event.event_date.strftime('%Y-%m-%d %H:%M:%S'),
+                            "Old Status": event.old_status,
+                            "New Status": event.new_status,
+                            "Summary": event.summary,
+                            "Email Subject": event.email_subject
+                        })
+                    
+                    full_df = pd.DataFrame(csv_data)
+                    csv_file = full_df.to_csv(index=False).encode('utf-8')
+                    
+                    st.download_button(
+                        label="Click to Download CSV",
+                        data=csv_file,
+                        file_name=f"full_application_history_{datetime.now().strftime('%Y%m%d')}.csv",
+                        mime='text/csv'
+                    )
+                else:
+                    st.info("No history found.")
+        
         st.divider()
         
-        if st.button("⚠️ Reset Database"):
-            try:
-                with Session(engine) as session:
-                    # 1. Delete dependents and commit to free up FK constraints
-                    session.exec(delete(ApplicationEvent)) 
-                    session.commit()
-                    
-                    # 2. Delete main records
-                    session.exec(delete(JobApplication))
-                    session.exec(delete(ProcessedEmail))
-                    session.commit()
-                st.warning("Database cleared!")
-            except Exception as e:
-                st.error(f"Error resetting database: {e}")
+        col_c1, col_c2 = st.columns(2)
+        with col_c1:
+            if st.button("🧹 Clear Cache"):
+                try:
+                    with Session(engine) as session:
+                        session.exec(delete(ProcessedEmail))
+                        session.commit()
+                    st.success("Cache cleared!")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+        with col_c2:
+            if st.button("⚠️ Reset DB"):
+                try:
+                    with Session(engine) as session:
+                        # 1. Delete dependents and commit to free up FK constraints
+                        session.exec(delete(ApplicationEventLog)) 
+                        session.commit()
+                        
+                        # 2. Delete main records
+                        session.exec(delete(JobApplication))
+                        session.exec(delete(ProcessedEmail))
+                        session.commit()
+                    st.warning("DB cleared!")
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
     # Metrics & UI
     with Session(engine) as session:
@@ -323,81 +373,39 @@ def main():
 
     df = pd.DataFrame([a.model_dump() for a in apps])
     
-    # Display Stats
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Active Applications", len(df))
-    c2.metric("Pending", len(df[df['status'] == ApplicationStatus.PENDING]))
-    c3.metric("Interviews", len(df[df['status'] == ApplicationStatus.INTERVIEW]))
-    c4.metric("Offers", len(df[df['status'] == ApplicationStatus.OFFER]))
-    c5.metric("Rejections", len(df[df['status'] == ApplicationStatus.REJECTED]))
+    # --- TABS SELECTION ---
+    tab_dash, tab_kanban = st.tabs(["📊 Dashboard", "📋 Kanban Board"])
 
-    # Dashboard Charts
-    col_a, col_b = st.columns(2)
-    selected_status = None
-    
-    with col_a:
-        st.subheader("Process Status")
-        if not df.empty:
-            fig = px.pie(df, names='status', hole=0.4)
-            # Enable selection on the chart
-            event = st.plotly_chart(fig, width='stretch', on_select="rerun", selection_mode="points")
-            
-            # Extract selected status if any point is clicked
-            if event and event.selection and event.selection["points"]:
-                # The point index corresponds to the row in the aggregated data used by Plotly
-                # But for a simple pie chart grouping, we can usually get the label directly from point info if passed, 
-                # or we infer it. Plotly's selection event returns point indices relative to the underlying data trace.
-                # However, px.pie aggregates data. Ideally we get the label.
-                # 'point_index' in selection refers to the slice index.
-                # We need to map this back to the status.
-                # Let's find the status corresponding to the clicked slice.
-                # px.pie sorts by value or label? Default is value?
-                # Actually, capturing the clicked value from a pre-aggregated dataframe is safer.
-                pass
-                # A simpler way for Streamlit < 1.35 or standard usage:
-                # Iterate through points to find the label (status). 
-                # Note: Streamlit's on_select returns a dict with "points" list.
-                # Each point has 'point_index'.
-                # For px.pie, the data is aggregated.
-                # Let's reconstruct the aggregation to map index to label.
-                counts = df['status'].value_counts()
-                # Plotly Express Pie default sort is usually by value descending? 
-                # To be precise, let's rely on the fact that the user wants to filter.
-                
-                # REVISED STRATEGY:
-                # We can't easily map the point index back to the status label reliably without knowing PX's exact internal sort.
-                # So we will rely on the user filtering via the table or add a selectbox if chart interaction is flaky.
-                # BUT, let's try to get the label from the selection event if available.
-                # Streamlit docs say event.selection['points'][0] contains 'point_index'.
-                
-                # Let's try to map it using the same aggregation PX uses.
-                # PX Pie trace order is input order unless sorted.
-                pass
+    with tab_dash:
+        # Display Stats
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Active Applications", len(df))
+        c2.metric("Pending", len(df[df['status'] == ApplicationStatus.PENDING]))
+        c3.metric("Interviews", len(df[df['status'] == ApplicationStatus.INTERVIEW]))
+        c4.metric("Offers", len(df[df['status'] == ApplicationStatus.OFFER]))
+        c5.metric("Rejections", len(df[df['status'] == ApplicationStatus.REJECTED]))
 
-    with col_b:
-        st.subheader("Activity Timeline")
-        if not df.empty:
-            df['date'] = pd.to_datetime(df['last_updated']).dt.date
-            timeline = df.groupby('date').size().reset_index(name='count')
-            fig2 = px.bar(timeline, x='date', y='count')
-            st.plotly_chart(fig2, width='stretch')
+        # Dashboard Charts
+        col_a, col_b = st.columns(2)
+        
+        with col_a:
+            st.subheader("Process Status")
+            if not df.empty:
+                fig = px.pie(df, names='status', hole=0.4)
+                st.plotly_chart(fig, width='stretch')
 
-    # --- FILTERING LOGIC ---
-    # Since capturing pie slice labels is tricky with just point_index in Streamlit's current API wrapper for simple charts,
-    # and the user asked for "click on element", we will try to implement it, but fallback to a clearer filter if needed.
-    
-    # Actually, let's add a robust Status Filter dropdown that works alongside the chart for clarity.
-    # But to answer the user's specific request:
-    # We will assume the chart selection is too complex to implement perfectly safely in one go without debugging the event structure.
-    # Instead, let's add a "Filter by Status" selectbox that defaults to "All".
-    
-    st.subheader("Application Pipeline")
-    
-    # Optional: Filter by Status (Manual)
-    status_options = ["All"] + sorted(df['status'].unique().tolist())
-    filter_status = st.selectbox("Filter by Status", options=status_options)
-    
-    if not df.empty:
+        with col_b:
+            st.subheader("Activity Timeline")
+            if not df.empty:
+                df['date'] = pd.to_datetime(df['last_updated']).dt.date
+                timeline = df.groupby('date').size().reset_index(name='count')
+                fig2 = px.bar(timeline, x='date', y='count')
+                st.plotly_chart(fig2, width='stretch')
+
+        st.subheader("Application Pipeline")
+        status_options = ["All"] + sorted(df['status'].unique().tolist())
+        filter_status = st.selectbox("Filter Table by Status", options=status_options)
+        
         df_display = df.copy()
         if filter_status != "All":
             df_display = df_display[df_display['status'] == filter_status]
@@ -414,58 +422,166 @@ def main():
             selection_mode="single-row",
             on_select="rerun" 
         )
-        
-        # --- DRILL DOWN / HISTORY VIEW ---
-        st.divider()
-        st.subheader("🔎 Application Details & History")
-        
-        # Determine initial selection from table click
-        company_to_show = None
-        if selection and selection.selection["rows"]:
-            # Get the index of the selected row
-            selected_row_idx = selection.selection["rows"][0]
-            # Get the actual data row from the sorted/filtered dataframe
-            # Note: st.dataframe selection index is zero-based relative to the *displayed* data
-            sorted_df = df_display[['Applied Date', 'company_name', 'position', 'status', 'Last Update', 'summary']].sort_values(by='Last Update', ascending=False)
-            company_to_show = sorted_df.iloc[selected_row_idx]['company_name']
 
-        options = [""] + sorted(df['company_name'].unique().tolist())
-        # If we have a selection from table, find its index in options
-        index_to_select = 0
-        if company_to_show and company_to_show in options:
-            index_to_select = options.index(company_to_show)
-
-        selected_company = st.selectbox("Select Company to View History", options=options, index=index_to_select)
+    with tab_kanban:
+        st.subheader("Visual Pipeline")
         
-        if selected_company:
-            # Fetch full details including history
-            with Session(engine) as session:
-                app_details = session.exec(select(JobApplication).where(JobApplication.company_name == selected_company)).first()
-                if app_details:
-                    # History
-                    history = session.exec(select(ApplicationEvent).where(ApplicationEvent.application_id == app_details.id).order_by(ApplicationEvent.event_date.desc())).all()
+        # Define Kanban columns (exclude UNKNOWN for clean view)
+        kanban_statuses = [
+            ApplicationStatus.APPLIED,
+            ApplicationStatus.PENDING,
+            ApplicationStatus.ASSESSMENT,
+            ApplicationStatus.INTERVIEW,
+            ApplicationStatus.OFFER,
+            ApplicationStatus.REJECTED
+        ]
+        
+        cols = st.columns(len(kanban_statuses))
+        
+        for i, status in enumerate(kanban_statuses):
+            with cols[i]:
+                st.markdown(f"### {status.value}")
+                # Filter apps for this column
+                status_apps = [a for a in apps if a.status == status]
+                
+                for app in status_apps:
+                    with st.container(border=True):
+                        st.markdown(f"**{app.company_name}**")
+                        st.caption(f"{app.position}")
+                        if app.summary:
+                            st.markdown(f"<small>{app.summary[:60]}...</small>", unsafe_allow_html=True)
+                        
+                        # Status change trigger
+                        new_status_val = st.selectbox(
+                            "Move to:",
+                            options=[s.value for s in kanban_statuses],
+                            index=[s.value for s in kanban_statuses].index(status.value),
+                            key=f"move_{app.id}_{app.status}"
+                        )
+                        
+                        if new_status_val != status.value:
+                            # Trigger update
+                            with Session(engine) as session:
+                                db_app = session.get(JobApplication, app.id)
+                                if db_app:
+                                    old_s = db_app.status
+                                    db_app.status = ApplicationStatus(new_status_val)
+                                    db_app.last_updated = datetime.utcnow()
+                                    
+                                    # Log manual event
+                                    event = ApplicationEventLog(
+                                        application_id=db_app.id,
+                                        old_status=old_s,
+                                        new_status=db_app.status,
+                                        summary="Status manually updated by user",
+                                        email_subject="Manual Update",
+                                        event_date=db_app.last_updated
+                                    )
+                                    session.add(db_app)
+                                    session.add(event)
+                                    session.commit()
+                                    st.rerun()
+
+    # --- DRILL DOWN / HISTORY VIEW ---
+    st.divider()
+    st.subheader("🔎 Application Details & History")
+    
+    # Determine initial selection from table click (if in dashboard tab)
+    company_to_show = None
+    if 'selection' in locals() and selection and selection.selection["rows"]:
+        selected_row_idx = selection.selection["rows"][0]
+        sorted_df = df_display[['Applied Date', 'company_name', 'position', 'status', 'Last Update', 'summary']].sort_values(by='Last Update', ascending=False)
+        company_to_show = sorted_df.iloc[selected_row_idx]['company_name']
+
+    options = [""] + sorted(df['company_name'].unique().tolist())
+    index_to_select = 0
+    if company_to_show and company_to_show in options:
+        index_to_select = options.index(company_to_show)
+
+    selected_company = st.selectbox("Select Company to View History", options=options, index=index_to_select)
+    
+    if selected_company:
+        # Fetch full details including history
+        with Session(engine) as session:
+            app_details = session.exec(select(JobApplication).where(JobApplication.company_name == selected_company)).first()
+            if app_details:
+                # History
+                history = session.exec(select(ApplicationEventLog).where(ApplicationEventLog.application_id == app_details.id).order_by(ApplicationEventLog.event_date.desc())).all()
+                
+                hd1, hd2 = st.columns([1, 2])
+                with hd1:
+                    st.markdown(f"**Company:** {app_details.company_name}")
+                    st.markdown(f"**Position:** {app_details.position}")
+                    st.markdown(f"**Status:** {app_details.status.value}")
+                    st.markdown(f"**Last Updated:** {app_details.last_updated.strftime('%Y-%m-%d')}")
                     
-                    hd1, hd2 = st.columns([1, 2])
-                    with hd1:
-                        st.markdown(f"**Company:** {app_details.company_name}")
-                        st.markdown(f"**Position:** {app_details.position}")
-                        st.markdown(f"**Status:** {app_details.status.value}")
-                        st.markdown(f"**Last Updated:** {app_details.last_updated.strftime('%Y-%m-%d')}")
-                    
-                    with hd2:
-                        st.markdown("### Event Log")
-                        if history:
-                            history_data = []
-                            for h in history:
-                                history_data.append({
-                                    "Date": h.event_date.strftime('%Y-%m-%d %H:%M'),
-                                    "Event": f"{h.old_status} -> {h.new_status}" if h.old_status else f"New Application ({h.new_status})",
-                                    "Summary": h.summary,
-                                    "Subject": h.email_subject
-                                })
-                            st.dataframe(pd.DataFrame(history_data), width="stretch", hide_index=True)
-                        else:
-                            st.info("No history events recorded.")
+                    st.divider()
+                    with st.expander("✏️ Edit Details"):
+                        new_company = st.text_input("Company Name", value=app_details.company_name)
+                        new_position = st.text_input("Position", value=app_details.position)
+                        
+                        # Status Selection
+                        status_options = [s.value for s in ApplicationStatus]
+                        current_idx = 0
+                        if app_details.status.value in status_options:
+                            current_idx = status_options.index(app_details.status.value)
+                        
+                        new_status_val = st.selectbox("Status", options=status_options, index=current_idx, key="edit_status_select")
+
+                        if st.button("Save Changes"):
+                            with Session(engine) as edit_session:
+                                db_app = edit_session.get(JobApplication, app_details.id)
+                                if db_app:
+                                    # Update basic fields
+                                    db_app.company_name = new_company
+                                    db_app.position = new_position
+                                    
+                                    # Handle status change
+                                    new_status_enum = ApplicationStatus(new_status_val)
+                                    if db_app.status != new_status_enum:
+                                        old_status = db_app.status
+                                        db_app.status = new_status_enum
+                                        db_app.last_updated = datetime.now()
+                                        
+                                        # Log event
+                                        event = ApplicationEventLog(
+                                            application_id=db_app.id,
+                                            old_status=old_status,
+                                            new_status=new_status_enum,
+                                            summary="Status manually updated via Edit Details",
+                                            email_subject="Manual Update",
+                                            event_date=db_app.last_updated
+                                        )
+                                        edit_session.add(event)
+                                    
+                                    edit_session.add(db_app)
+                                    edit_session.commit()
+                                    st.success("Updated!")
+                                    st.rerun()
+                
+                with hd2:
+                    st.markdown("### Event Log")
+                    if history:
+                        history_data = []
+                        for h in history:
+                            history_data.append({
+                                "Date": h.event_date.strftime('%Y-%m-%d %H:%M'),
+                                "Event": f"{h.old_status} -> {h.new_status}" if h.old_status else f"New Application ({h.new_status})",
+                                "Summary": h.summary,
+                                "Subject": h.email_subject
+                            })
+                        history_df = pd.DataFrame(history_data)
+                        st.dataframe(history_df, width="stretch", hide_index=True)
+                        
+                        csv = history_df.to_csv(index=False).encode('utf-8')
+                        st.download_button(
+                            label="📥 Download History (CSV)",
+                            data=csv,
+                            file_name=f"{app_details.company_name}_history.csv",
+                            mime='text/csv',
+                        )
+                    else:
+                        st.info("No history events recorded.")
 
 
 if __name__ == "__main__":

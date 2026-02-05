@@ -6,6 +6,11 @@ start_date: '2025-05-01'  # Format: YYYY-MM-DD
 scopes:
   - 'https://www.googleapis.com/auth/gmail.readonly'
 
+# AI Settings
+ai:
+  # local_model_name: "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+  local_model_name: "HuggingFaceTB_SmolLM3-3B-Q4_K_M.gguf"
+
 # Message filtering
 skip_emails: []
 skip_domains:
@@ -19,6 +24,7 @@ extraction:
   platforms:
     - 'myworkday'
     - 'workday'
+    - 'myworkdayjobs'
     - 'smartrecruiters'
     - 'linkedin'
     - 'indeed'
@@ -31,10 +37,16 @@ extraction:
     - 'icims'
     - 'taleo'
     - 'successfactors'
+    - 'successfactors.eu'
+    - 'successfactors.com'
     - 'join.com'
     - 'teamtailor'
     - 'personio'
     - 'workable'
+    - 'force.com'
+    - 'oraclecloud'
+    - 'avature'
+    - 'brassring'
   
   generic_names:
     - 'noreply'

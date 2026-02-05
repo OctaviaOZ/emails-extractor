@@ -1,7 +1,7 @@
 from sqlmodel import Session, select
 from datetime import datetime
 import re
-from app.models import JobApplication, ApplicationEvent, ApplicationStatus
+from app.models import JobApplication, ApplicationEventLog, ApplicationStatus
 from app.services.extractor import ApplicationData
 import logging
 
@@ -200,7 +200,7 @@ class ApplicationProcessor:
         logger.info(f"🔄 Updated Application: {app.company_name} ({old_status} -> {new_status})")
 
     def _log_event(self, app_id, old_s, new_s, summary, subject, timestamp):
-        event = ApplicationEvent(
+        event = ApplicationEventLog(
             application_id=app_id,
             old_status=old_s,
             new_status=new_s,
