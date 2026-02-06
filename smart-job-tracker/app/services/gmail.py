@@ -3,6 +3,7 @@ import pickle
 import logging
 import socket
 import ssl
+import re
 from typing import List
 from bs4 import BeautifulSoup
 from google.auth.transport.requests import Request
@@ -18,16 +19,39 @@ SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
 def clean_html_for_llm(html: str) -> str:
     """
-    Cleans HTML content to be LLM-friendly by removing non-essential tags
-    and reducing token usage.
+    Cleans HTML content to be LLM-friendly.
+    Special handling for tables to preserve structure via Markdown-like formatting.
     """
     if not html:
         return ""
+    
     soup = BeautifulSoup(html, "html.parser")
-    # Remove script, style, and nav elements which contain no job info
+    
+    # 1. Remove non-content elements
     for script_or_style in soup(["script", "style", "nav", "footer", "header", "meta", "link"]):
         script_or_style.decompose()
-    return soup.get_text(separator=' ', strip=True)
+
+    # 2. Convert tables to Markdown-like text
+    for table in soup.find_all("table"):
+        table_text = []
+        for row in table.find_all("tr"):
+            cells = [cell.get_text(strip=True) for cell in row.find_all(["td", "th"])]
+            if any(cells): # Avoid empty rows
+                table_text.append("| " + " | ".join(cells) + " |")
+        
+        # Replace the table element with its text representation
+        if table_text:
+            table_md = "\n" + "\n".join(table_text) + "\n"
+            table.replace_with(table_md)
+
+    # 3. Get text with standard separators
+    text = soup.get_text(separator=' ', strip=True)
+    
+    # 4. Clean up excessive whitespace while preserving newlines for the tables
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r'\n\s*\n', '\n\n', text)
+    
+    return text.strip()
 
 def get_gmail_service(credentials_path: str = 'credentials.json', token_path: str = 'token.pickle', scopes: list = None) -> Resource:
     """Shows basic usage of the Gmail API.

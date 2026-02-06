@@ -283,12 +283,13 @@ def main():
             st.info("No applications found. Click 'Sync' to start.")
         else:
             # Display Stats
-            c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric("Active Applications", len(df))
+            c1, c2, c3, c4, c5, c6 = st.columns(6)
+            c1.metric("Active", len(df))
             c2.metric("Pending", len(df[df['status'] == ApplicationStatus.PENDING]))
-            c3.metric("Interviews", len(df[df['status'] == ApplicationStatus.INTERVIEW]))
-            c4.metric("Offers", len(df[df['status'] == ApplicationStatus.OFFER]))
-            c5.metric("Rejections", len(df[df['status'] == ApplicationStatus.REJECTED]))
+            c3.metric("Communication", len(df[df['status'] == ApplicationStatus.COMMUNICATION]))
+            c4.metric("Interviews", len(df[df['status'] == ApplicationStatus.INTERVIEW]))
+            c5.metric("Offers", len(df[df['status'] == ApplicationStatus.OFFER]))
+            c6.metric("Rejections", len(df[df['status'] == ApplicationStatus.REJECTED]))
 
             # Dashboard Charts
             col_a, col_b = st.columns(2)
@@ -339,6 +340,7 @@ def main():
             kanban_statuses = [
                 ApplicationStatus.APPLIED,
                 ApplicationStatus.PENDING,
+                ApplicationStatus.COMMUNICATION,
                 ApplicationStatus.ASSESSMENT,
                 ApplicationStatus.INTERVIEW,
                 ApplicationStatus.OFFER,

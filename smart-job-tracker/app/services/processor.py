@@ -120,17 +120,18 @@ class ApplicationProcessor:
             # Case 2: Active Application Exists
             raw_status = data.status
             
-            # Normalize Applied/Unknown to Pending for existing apps to see if they are better than current
+            # Normalize Applied/Unknown to COMMUNICATION for existing apps
             if raw_status in [ApplicationStatus.APPLIED, ApplicationStatus.UNKNOWN]:
-                raw_status = ApplicationStatus.PENDING
+                raw_status = ApplicationStatus.COMMUNICATION
                 if not data.summary or data.summary == "No summary extracted":
-                    data.summary = "Application confirmation/update"
+                    data.summary = "Application update/communication"
 
             # Use STATUS_RANK to ensure we only upgrade status
             current_rank = STATUS_RANK.get(existing_app.status, 0)
             new_rank = STATUS_RANK.get(raw_status, 0)
             
             final_status_for_db = existing_app.status
+            # Only upgrade if the new status is genuinely a higher rank
             if new_rank > current_rank:
                 final_status_for_db = raw_status
             

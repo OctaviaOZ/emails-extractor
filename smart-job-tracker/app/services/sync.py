@@ -7,7 +7,7 @@ from sqlmodel import Session, select
 from dateutil import parser
 
 from app.models import JobApplication, ApplicationStatus, ProcessedEmail, ApplicationEventLog
-from app.services.gmail import get_message_body, batch_get_message_bodies
+from app.services.gmail import get_message_body, batch_get_message_bodies, clean_html_for_llm
 from app.services.extractor import EmailExtractor, ApplicationData
 from app.services.processor import ApplicationProcessor
 
@@ -139,7 +139,8 @@ class SyncService:
                 except: pass
 
             # Extract Data
-            data = self.extractor.extract(full_msg['subject'], full_msg['sender'], full_msg['text'], full_msg['html'])
+            cleaned_html = clean_html_for_llm(full_msg.get('html', ''))
+            data = self.extractor.extract(full_msg['subject'], full_msg['sender'], full_msg['text'], cleaned_html)
             
             if not data or data.company_name == "Unknown":
                 self.session.add(ProcessedEmail(email_id=msg_id, company_name="Unknown"))

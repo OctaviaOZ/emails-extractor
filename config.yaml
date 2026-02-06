@@ -1,176 +1,166 @@
-# Smart Job Tracker Configuration
-
-# Gmail API settings
-label_name: 'apply'
-start_date: '2025-05-01'  # Format: YYYY-MM-DD
-scopes:
-  - 'https://www.googleapis.com/auth/gmail.readonly'
-
-# AI Settings
 ai:
-  # local_model_name: "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
-  local_model_name: "HuggingFaceTB_SmolLM3-3B-Q4_K_M.gguf"
-
-# Message filtering
-skip_emails: []
-skip_domains:
-  - 'gmail.com'
-  - 'jobagent.stepstone.de'
-  - 'indeed.com'
-  - 'linkedin.com'
-
-# Extraction Heuristics
+  local_model_name: HuggingFaceTB_SmolLM3-3B-Q4_K_M.gguf
 extraction:
-  platforms:
-    - 'myworkday'
-    - 'workday'
-    - 'myworkdayjobs'
-    - 'smartrecruiters'
-    - 'linkedin'
-    - 'indeed'
-    - 'greenhouse'
-    - 'lever'
-    - 'ashby'
-    - 'recruitee'
-    - 'bamboohr'
-    - 'jobvite'
-    - 'icims'
-    - 'taleo'
-    - 'successfactors'
-    - 'successfactors.eu'
-    - 'successfactors.com'
-    - 'join.com'
-    - 'teamtailor'
-    - 'personio'
-    - 'workable'
-    - 'force.com'
-    - 'oraclecloud'
-    - 'avature'
-    - 'brassring'
-  
   generic_names:
-    - 'noreply'
-    - 'no-reply'
-    - 'donotreply'
-    - 'mailer'
-    - 'mailer-daemon'
-    - 'candidates'
-    - 'candidate'
-    - 'careers'
-    - 'jobs'
-    - 'hiring'
-    - 'hire'
-    - 'team'
-    - 'work'
-    - 'talent'
-    - 'recruiting'
-    - 'recruit'
-    - 'application'
-    - 'applications'
-    - 'apply'
-    - 'notification'
-    - 'notifications'
-    - 'alert'
-    - 'alerts'
-    - 'update'
-    - 'updates'
-    - 'info'
-    - 'contact'
-    - 'support'
-    - 'hello'
-    - 'welcome'
-    - 'service'
-    - 'system'
-    - 'mail'
-    - 'email'
-    - 'inbox'
-    - 'post'
-    - 'office'
-    - 'admin'
-    - 'hr'
-
+  - noreply
+  - no-reply
+  - donotreply
+  - mailer
+  - mailer-daemon
+  - candidates
+  - candidate
+  - careers
+  - jobs
+  - hiring
+  - hire
+  - team
+  - work
+  - talent
+  - recruiting
+  - recruit
+  - application
+  - applications
+  - apply
+  - notification
+  - notifications
+  - alert
+  - alerts
+  - update
+  - updates
+  - info
+  - contact
+  - support
+  - hello
+  - welcome
+  - service
+  - system
+  - mail
+  - email
+  - inbox
+  - post
+  - office
+  - admin
+  - hr
+  platforms:
+  - myworkday
+  - workday
+  - myworkdayjobs
+  - smartrecruiters
+  - linkedin
+  - indeed
+  - greenhouse
+  - lever
+  - ashby
+  - recruitee
+  - bamboohr
+  - jobvite
+  - icims
+  - taleo
+  - successfactors
+  - successfactors.eu
+  - successfactors.com
+  - join.com
+  - teamtailor
+  - personio
+  - workable
+  - force.com
+  - oraclecloud
+  - avature
+  - brassring
   subject_patterns:
-    - pattern: "(?i) at (.*)"
-      group: 1
-    - pattern: "(?i) regarding (.*)"
-      group: 1
-    - pattern: "(?i)Welcome to (.*)"
-      group: 1
-    - pattern: "(?i)applying to (.*)"
-      group: 1
-    - pattern: "(?i)Application to (.*)"
-      group: 1
-    - pattern: "(?i)interest in (.*)"
-      group: 1
-    - pattern: "(?i)sent to (.*)"
-      group: 1
-    - pattern: "(?i) bei der (.*)"
-      group: 1
-    - pattern: "(?i) bei (.*)"
-      group: 1
-    - pattern: "(?i)Bewerbung auf (.*)"
-      group: 1
-
-# Status Detection Keywords
-status_keywords:
-  rejected:
-    - 'reject'
-    - 'unfortunately'
-    - 'not moving forward'
-    - 'not be proceeding'
-    - 'other candidates'
-    - 'not continuing'
-    - 'Absage'
-    - 'nicht berücksichtigen'
-    - 'anderweitig entschieden'
-    - 'abgeschlossen'
-  interview:
-    - 'interview'
-    - 'schedule a call'
-    - 'availability'
-    - 'phone screen'
-    - 'zoom'
-    - 'Vorstellungsgespräch'
-    - 'Kennenlernen'
-    - 'Gespräch einladen'
-    - 'Terminvorschlag'
-  offer:
-    - 'job offer'
-    - 'employment offer'
-    - 'congratulations'
-    - 'pleased to offer'
-    - 'Vertragsangebot'
-    - 'Vertragsentwurf'
-    - 'Arbeitsangebot'
-  assessment:
-    - 'assessment'
-    - 'coding challenge'
-    - 'take-home'
-    - 'test'
-    - 'Aufgabe'
-    - 'Eignungstest'
-    - 'HackerRank'
-    - 'Codility'
-    - 'Arbeitsprobe'
-  applied:
-    - 'applied'
-    - 'confirming'
-    - 'application received'
-    - 'successfully submitted'
-    - 'Eingangsbestätigung'
-    - 'Vielen Dank für Ihre Bewerbung'
-    - 'Vielen Dank für Deine Bewerbung'
-    - 'Bewerbung eingegangen'
-    - 'Eingang Ihrer Bewerbung'
-    - 'Interesse an'
-
-# Report settings
+  - group: 1
+    pattern: (?i) at (.*)
+  - group: 1
+    pattern: (?i) regarding (.*)
+  - group: 1
+    pattern: (?i)Welcome to (.*)
+  - group: 1
+    pattern: (?i)applying to (.*)
+  - group: 1
+    pattern: (?i)Application to (.*)
+  - group: 1
+    pattern: (?i)interest in (.*)
+  - group: 1
+    pattern: (?i)sent to (.*)
+  - group: 1
+    pattern: (?i) bei der (.*)
+  - group: 1
+    pattern: (?i) bei (.*)
+  - group: 1
+    pattern: (?i)Bewerbung auf (.*)
+label_name: apply
 report_mapping:
-  APPLIED: "Beworben"
-  REJECTED: "Absage"
-  INTERVIEW: "Vorstellungsgespräch"
-  ASSESSMENT: "Eignungstest"
-  OFFER: "Vertragsangebot"
-  UNKNOWN: "Unbekannt"
-  PENDING: "Laufend"
-  COMMUNICATION: "Kommunikation"
+  APPLIED: Beworben
+  ASSESSMENT: Eignungstest
+  COMMUNICATION: Kommunikation
+  INTERVIEW: "Vorstellungsgespr\xE4ch"
+  OFFER: Vertragsangebot
+  PENDING: Laufend
+  REJECTED: Absage
+  UNKNOWN: Unbekannt
+scopes:
+- https://www.googleapis.com/auth/gmail.readonly
+skip_domains:
+- gmail.com
+- jobagent.stepstone.de
+- indeed.com
+- linkedin.com
+skip_emails: []
+start_date: '2025-09-16'
+status_keywords:
+  applied:
+  - applied
+  - confirming
+  - application received
+  - successfully submitted
+  - "Eingangsbest\xE4tigung"
+  - "Vielen Dank f\xFCr Ihre Bewerbung"
+  - "Vielen Dank f\xFCr Deine Bewerbung"
+  - Bewerbung eingegangen
+  - Eingang Ihrer Bewerbung
+  - Interesse an
+  - Bewerbung ... erhalten
+  - "vielen Dank f\xFCr Ihr Interesse"
+  - "vielen Dank f\xFCr Dein Interesse"
+  assessment:
+  - assessment
+  - coding challenge
+  - take-home
+  - test
+  - Aufgabe
+  - Eignungstest
+  - HackerRank
+  - Codility
+  - Arbeitsprobe
+  - Challenge
+  interview:
+  - interview
+  - schedule a call
+  - availability
+  - phone screen
+  - zoom
+  - "Vorstellungsgespr\xE4ch"
+  - Kennenlernen
+  - "Gespr\xE4ch einladen"
+  - Terminvorschlag
+  - Videointerview
+  offer:
+  - job offer
+  - employment offer
+  - pleased to offer
+  - Vertragsangebot
+  - Vertragsentwurf
+  - Arbeitsangebot
+  - "Angebot f\xFCr"
+  rejected:
+  - reject
+  - unfortunately
+  - not moving forward
+  - not be proceeding
+  - other candidates
+  - not continuing
+  - Absage
+  - "nicht ber\xFCcksichtigen"
+  - anderweitig entschieden
+  - abgeschlossen
+  - nicht weiterverfolgen

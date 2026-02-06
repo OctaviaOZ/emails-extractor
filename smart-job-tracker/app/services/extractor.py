@@ -56,12 +56,12 @@ logger = logging.getLogger(__name__)
 
 # --- Structured Output Schema ---
 class ApplicationData(BaseModel):
-    company_name: str = Field(description="Name of the employer (e.g., 'Google'). IGNORE platforms like 'Workday', 'Successfactors', 'Greenhouse'.")
-    position: Optional[str] = Field(default=None, description="Job title if mentioned")
-    status: ApplicationStatus = Field(description="Current status based on email content")
-    summary: Optional[str] = Field(default="No summary provided", description="A very short, abstractive summary of the email content (max 15 words). Do NOT quote the email body.")
-    is_rejection: bool = Field(description="True if this specific email is a rejection")
-    next_step: Optional[str] = Field(default=None, description="Immediate next step e.g. 'Wait for feedback'")
+    company_name: str = Field(description="Name of the employer (e.g., 'Google', 'Deloitte'). NEVER use platform names like 'Workday', 'Greenhouse', 'Successfactors'.")
+    position: Optional[str] = Field(default="Unknown Position", description="Job title if mentioned (e.g., 'Software Engineer'). If not found, use 'Unknown Position'.")
+    status: ApplicationStatus = Field(description="Status: [Applied, Interview, Assessment, Offer, Rejected, Pending].")
+    summary: Optional[str] = Field(default="No summary provided", description="One-sentence English summary (max 15 words). For German emails, translate key info to English.")
+    is_rejection: bool = Field(description="True ONLY if they explicitly say they are not proceeding.")
+    next_step: Optional[str] = Field(default="Wait for feedback", description="Next action (e.g., 'Interview on Monday') or 'Wait for feedback'.")
 
     @model_validator(mode='before')
     @classmethod
@@ -206,21 +206,22 @@ class LocalProvider(LLMProvider):
 
     def extract(self, sender: str, subject: str, body: str) -> ApplicationData:
         system_prompt = (
-            "/think\n"
             "You are a professional recruitment assistant specializing in English and German emails.\n"
-            "Your task is to analyze the provided email and extract structured data in JSON format.\n"
-            "CRITICAL: Distinguish between the 'Platform' (e.g., Workday, SuccessFactors, Greenhouse, SmartRecruiters) and the 'Employer' (the actual company you applied to).\n"
-            "REQUIRED FIELDS:\n"
-            "- company_name: The actual employer (e.g., 'Deloitte', 'Richemont'). Ignore platform names.\n"
-            "- position: Job title (e.g., 'Software Engineer'). Default to 'Unknown Position' if missing.\n"
-            "- status: One of [Applied, Interview, Assessment, Offer, Rejected, Pending].\n"
-            "- summary: A concise summary (max 12 words) of the key update. For German emails, translate the essence to English.\n"
-            "- is_rejection: Boolean. True if the email explicitly states they are not moving forward.\n"
-            "- next_step: Immediate action required or 'Wait for feedback'.\n\n"
+            "Analyze the email and extract structured data in JSON format.\n\n"
+            "GUIDELINES:\n"
+            "1. COMPANY: The actual employer (e.g., 'Deloitte', 'BMW'). IGNORE platforms like 'Workday', 'Greenhouse', 'SuccessFactors', 'SmartRecruiters'.\n"
+            "2. POSITION: Job title (e.g., 'Data Engineer'). If not found, use 'Unknown Position'.\n"
+            "3. STATUS: [Applied, Interview, Assessment, Offer, Rejected, Pending].\n"
+            "4. SUMMARY: One-sentence English summary (max 15 words). Translate German to English.\n\n"
+            "EXAMPLES:\n"
+            "Input: Subject: Application received: Software Engineer at Acme | Body: Hi, we received your application for Software Engineer.\n"
+            "Output: {\"company_name\": \"Acme\", \"position\": \"Software Engineer\", \"status\": \"Applied\", \"summary\": \"Application received and under review.\", \"is_rejection\": false, \"next_step\": \"Wait for feedback\"}\n\n"
+            "Input: Subject: Deine Bewerbung bei DKB | Body: Hallo, wir haben deine Bewerbung als SAS Data Engineer erhalten.\n"
+            "Output: {\"company_name\": \"DKB\", \"position\": \"SAS Data Engineer\", \"status\": \"Applied\", \"summary\": \"Application received for SAS Data Engineer role.\", \"is_rejection\": false, \"next_step\": \"Wait for feedback\"}\n\n"
             "Respond ONLY with valid JSON."
         )
         
-        user_content = f"Sender: {sender}\nSubject: {subject}\nBody: {body[:5000]}" # Increased truncation for 3072 ctx window
+        user_content = f"Sender: {sender}\nSubject: {subject}\nBody: {body[:5000]}"
         
         # Create explicit GBNF grammar from the Pydantic schema
         schema_json = json.dumps(ApplicationData.model_json_schema())
@@ -334,6 +335,9 @@ class EmailExtractor:
             self.providers.append(OpenAIProvider(k))
 
     def extract(self, subject: str, sender: str, body_text: str, body_html: str = "") -> ApplicationData:
+        # Prefer body_html if provided, as it now contains preserved table structures
+        effective_body = body_html if body_html else body_text
+        
         for provider in self.providers:
             provider_name = provider.__class__.__name__
             if provider_name in self.failed_providers:
@@ -343,10 +347,10 @@ class EmailExtractor:
                 if provider_name == "LocalProvider":
                     logger.info("Starting Local AI processing...")
                 
-                result = provider.extract(sender, subject, body_text)
+                result = provider.extract(sender, subject, effective_body)
                 # Success! Now refine the results
-                result = self._refine_company(result, sender, body_text)
-                return self._refine_status(result, subject, body_text)
+                result = self._refine_company(result, sender, effective_body)
+                return self._refine_status(result, subject, effective_body)
             except Exception as e:
                 err_msg = str(e).lower()
                 # If it's a quota or identity error, mark provider as failed for this session
@@ -376,23 +380,37 @@ class EmailExtractor:
         search_text = (subject + " " + text).lower()
         kw_cfg = self.config.get('status_keywords', {})
 
+        # 1. REJECTION (Strongest)
         if any(w.lower() in search_text for w in kw_cfg.get('rejected', [])):
             data.status = ApplicationStatus.REJECTED
             data.is_rejection = True
             return data
 
+        # 2. ASSESSMENT
         if any(w.lower() in search_text for w in kw_cfg.get('assessment', [])):
             data.status = ApplicationStatus.ASSESSMENT
             return data
 
-        weak_statuses = [ApplicationStatus.APPLIED, ApplicationStatus.PENDING, ApplicationStatus.COMMUNICATION, ApplicationStatus.UNKNOWN]
-        if data.status not in weak_statuses:
+        # 3. APPLIED / RECEIPT (Very important to catch these before Offer/Interview)
+        applied_kws = kw_cfg.get('applied', [])
+        if any(w.lower() in search_text for w in applied_kws):
+            # If it matches a receipt, it's APPLIED. 
+            # Only override if current status is "weak" or if AI was unsure.
+            weak_statuses = [ApplicationStatus.PENDING, ApplicationStatus.COMMUNICATION, ApplicationStatus.UNKNOWN]
+            if data.status in weak_statuses:
+                data.status = ApplicationStatus.APPLIED
             return data
 
+        # 4. Trust AI for strong statuses if no explicit contradiction above
+        if data.status not in [ApplicationStatus.APPLIED, ApplicationStatus.PENDING, ApplicationStatus.COMMUNICATION, ApplicationStatus.UNKNOWN]:
+            return data
+
+        # 5. OFFER
         if any(w.lower() in search_text for w in kw_cfg.get('offer', [])):
             data.status = ApplicationStatus.OFFER
             return data
 
+        # 6. INTERVIEW
         if any(w.lower() in search_text for w in kw_cfg.get('interview', [])):
             data.status = ApplicationStatus.INTERVIEW
             return data
@@ -462,7 +480,7 @@ class EmailExtractor:
                         company = res
                         break
 
-        status = ApplicationStatus.PENDING
+        status = ApplicationStatus.APPLIED
         return ApplicationData(
             company_name=company, 
             status=status, 
