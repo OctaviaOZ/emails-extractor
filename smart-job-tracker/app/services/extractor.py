@@ -368,12 +368,24 @@ class EmailExtractor:
 
     def _refine_company(self, data: ApplicationData, sender: str, text: str) -> ApplicationData:
         platforms = self.config.get('extraction', {}).get('platforms', [])
-        # If AI returns a platform name, use heuristics to find the real employer
-        if any(p.lower() == data.company_name.lower() for p in platforms):
-            logger.info(f"AI returned platform '{data.company_name}'. Refining with heuristics.")
+        
+        # 1. If AI returned a platform name, it's a mistake. Use heuristics.
+        is_platform_name = any(p.lower() in data.company_name.lower() for p in platforms)
+        
+        if is_platform_name:
+            logger.info(f"AI incorrectly returned platform name '{data.company_name}'. Clearing for refinement.")
+            data.company_name = "Unknown"
+
+        # 2. Heuristic Refinement
+        if data.company_name == "Unknown":
             heuristic = self._extract_heuristic("", sender, text)
             if heuristic.company_name != "Unknown":
                 data.company_name = heuristic.company_name
+        
+        # 3. Final Guard: If it's STILL a platform name, set to Unknown
+        if any(p.lower() in data.company_name.lower() for p in platforms):
+            data.company_name = "Unknown"
+            
         return data
 
     def _refine_status(self, data: ApplicationData, subject: str, text: str) -> ApplicationData:

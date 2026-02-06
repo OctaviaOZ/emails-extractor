@@ -453,6 +453,7 @@ def main():
                     with st.expander("✏️ Edit Details"):
                         new_company = st.text_input("Company Name", value=app_details.company_name)
                         new_position = st.text_input("Position", value=app_details.position)
+                        new_notes = st.text_area("User Notes", value=app_details.notes or "")
                         
                         # Status Selection
                         status_options = [s.value for s in ApplicationStatus]
@@ -469,6 +470,7 @@ def main():
                                     # Update basic fields
                                     db_app.company_name = new_company
                                     db_app.position = new_position
+                                    db_app.notes = new_notes
                                     
                                     # Handle status change
                                     new_status_enum = ApplicationStatus(new_status_val)

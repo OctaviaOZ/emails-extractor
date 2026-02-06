@@ -51,6 +51,15 @@ class Company(SQLModel, table=True):
     domain: Optional[str] = Field(default=None, index=True)
     
     applications: List["JobApplication"] = Relationship(back_populates="company")
+    emails: List["CompanyEmail"] = Relationship(back_populates="company")
+
+class CompanyEmail(SQLModel, table=True):
+    """Remembers every email address associated with a company."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    email: str = Field(index=True, unique=True)
+    company_id: int = Field(foreign_key="company.id")
+    
+    company: Company = Relationship(back_populates="emails")
 
 class JobApplication(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
