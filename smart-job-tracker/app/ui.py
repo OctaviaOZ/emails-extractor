@@ -321,7 +321,7 @@ def main():
             
             # Display main table
             selection = st.dataframe(
-                df_display[['Applied Date', 'company_name', 'position', 'status', 'Last Update', 'summary']].sort_values(by='Last Update', ascending=False),
+                df_display[['Applied Date', 'company_name', 'position', 'status', 'Last Update', 'summary', 'notes']].sort_values(by='Last Update', ascending=False),
                 width='stretch',
                 hide_index=True,
                 height=400,

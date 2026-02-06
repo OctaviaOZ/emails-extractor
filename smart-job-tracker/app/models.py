@@ -78,6 +78,7 @@ class JobApplication(SQLModel, table=True):
     email_subject: str
     email_snippet: Optional[str] = None
     summary: Optional[str] = None
+    notes: Optional[str] = Field(default=None)
     
     # Metadata for reporting
     year: int
