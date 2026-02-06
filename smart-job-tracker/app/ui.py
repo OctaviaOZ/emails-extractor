@@ -53,7 +53,7 @@ from app.services.extractor import EmailExtractor, ApplicationData
 from app.services.processor import ApplicationProcessor
 from app.services.sync import SyncService
 from app.services.report import generate_pdf_report, generate_word_report
-from app.models import JobApplication, ApplicationStatus, ProcessedEmail, ApplicationEventLog, Company, ProcessingLog
+from app.models import JobApplication, ApplicationStatus, ProcessedEmail, ApplicationEventLog, Company, ProcessingLog, CompanyEmail
 
 # --- Load Environment Variables ---
 load_dotenv(os.path.join(base_dir, ".env"))
@@ -253,6 +253,7 @@ def main():
                             # Delete in order to respect Foreign Key constraints
                             session.exec(delete(ApplicationEventLog)) 
                             session.exec(delete(JobApplication))
+                            session.exec(delete(CompanyEmail)) # Delete emails before company
                             session.exec(delete(Company))
                             session.exec(delete(ProcessedEmail))
                             session.exec(delete(ProcessingLog))
@@ -319,15 +320,46 @@ def main():
             df_display['Applied Date'] = pd.to_datetime(df_display['created_at']).dt.strftime('%Y-%m-%d')
             df_display['Last Update'] = pd.to_datetime(df_display['last_updated']).dt.strftime('%Y-%m-%d')
             
-            # Display main table
-            selection = st.dataframe(
-                df_display[['Applied Date', 'company_name', 'position', 'status', 'Last Update', 'summary', 'notes']].sort_values(by='Last Update', ascending=False),
+            # Display main table with inline editing for Notes
+            edited_df = st.data_editor(
+                df_display[['id', 'Applied Date', 'company_name', 'position', 'status', 'Last Update', 'summary', 'notes']].sort_values(by='Last Update', ascending=False),
                 width='stretch',
                 hide_index=True,
                 height=400,
-                selection_mode="single-row",
-                on_select="rerun" 
+                column_config={
+                    "id": None, # Hide ID column
+                    "notes": st.column_config.TextColumn("User Notes (Editable)", width="large", help="Edit your notes directly here"),
+                    "Applied Date": st.column_config.Column(disabled=True),
+                    "company_name": st.column_config.Column("Company", disabled=True),
+                    "position": st.column_config.Column("Position", disabled=True),
+                    "status": st.column_config.Column("Status", disabled=True),
+                    "Last Update": st.column_config.Column(disabled=True),
+                    "summary": st.column_config.Column("Summary", disabled=True),
+                },
+                key="pipeline_editor",
+                on_change=None # We will handle saving below or via a button
             )
+
+            # Check for changes in the data editor and save them
+            if st.session_state.pipeline_editor and "edited_rows" in st.session_state.pipeline_editor:
+                edits = st.session_state.pipeline_editor["edited_rows"]
+                if edits:
+                    with Session(engine) as save_session:
+                        # Get the current sorted dataframe to map row indices to IDs
+                        # Fix: Must include 'Last Update' if we are sorting by it
+                        sorted_view = df_display.sort_values(by='Last Update', ascending=False)
+                        for row_idx, changes in edits.items():
+                            if "notes" in changes:
+                                app_id = int(sorted_view.iloc[row_idx]['id'])
+                                db_app = save_session.get(JobApplication, app_id)
+                                if db_app:
+                                    db_app.notes = changes["notes"]
+                                    save_session.add(db_app)
+                        save_session.commit()
+                        st.toast("Notes updated!", icon="📝")
+                        st.rerun()
+
+            st.caption("💡 Tip: You can edit notes directly in the table above and press Enter to save.")
 
     with tab_kanban:
         if not apps:
@@ -451,49 +483,50 @@ def main():
                     
                     st.divider()
                     with st.expander("✏️ Edit Details"):
-                        new_company = st.text_input("Company Name", value=app_details.company_name)
-                        new_position = st.text_input("Position", value=app_details.position)
-                        new_notes = st.text_area("User Notes", value=app_details.notes or "")
-                        
-                        # Status Selection
-                        status_options = [s.value for s in ApplicationStatus]
-                        current_idx = 0
-                        if app_details.status.value in status_options:
-                            current_idx = status_options.index(app_details.status.value)
-                        
-                        new_status_val = st.selectbox("Status", options=status_options, index=current_idx, key="edit_status_select")
+                        with st.form("edit_app_form"):
+                            new_company = st.text_input("Company Name", value=app_details.company_name)
+                            new_position = st.text_input("Position", value=app_details.position)
+                            new_notes = st.text_area("User Notes", value=app_details.notes or "")
+                            
+                            # Status Selection
+                            status_options = [s.value for s in ApplicationStatus]
+                            current_idx = 0
+                            if app_details.status.value in status_options:
+                                current_idx = status_options.index(app_details.status.value)
+                            
+                            new_status_val = st.selectbox("Status", options=status_options, index=current_idx)
 
-                        if st.button("Save Changes"):
-                            with Session(engine) as edit_session:
-                                db_app = edit_session.get(JobApplication, app_details.id)
-                                if db_app:
-                                    # Update basic fields
-                                    db_app.company_name = new_company
-                                    db_app.position = new_position
-                                    db_app.notes = new_notes
-                                    
-                                    # Handle status change
-                                    new_status_enum = ApplicationStatus(new_status_val)
-                                    if db_app.status != new_status_enum:
-                                        old_status = db_app.status
-                                        db_app.status = new_status_enum
-                                        db_app.last_updated = datetime.now()
+                            if st.form_submit_button("Save Changes"):
+                                with Session(engine) as edit_session:
+                                    db_app = edit_session.get(JobApplication, app_details.id)
+                                    if db_app:
+                                        # Update basic fields
+                                        db_app.company_name = new_company
+                                        db_app.position = new_position
+                                        db_app.notes = new_notes
                                         
-                                        # Log event
-                                        event = ApplicationEventLog(
-                                            application_id=db_app.id,
-                                            old_status=old_status,
-                                            new_status=new_status_enum,
-                                            summary="Status manually updated via Edit Details",
-                                            email_subject="Manual Update",
-                                            event_date=db_app.last_updated
-                                        )
-                                        edit_session.add(event)
-                                    
-                                    edit_session.add(db_app)
-                                    edit_session.commit()
-                                    st.success("Updated!")
-                                    st.rerun()
+                                        # Handle status change
+                                        new_status_enum = ApplicationStatus(new_status_val)
+                                        if db_app.status != new_status_enum:
+                                            old_status = db_app.status
+                                            db_app.status = new_status_enum
+                                            db_app.last_updated = datetime.now()
+                                            
+                                            # Log event
+                                            event = ApplicationEventLog(
+                                                application_id=db_app.id,
+                                                old_status=old_status,
+                                                new_status=new_status_enum,
+                                                summary="Status manually updated via Edit Details",
+                                                email_subject="Manual Update",
+                                                event_date=db_app.last_updated
+                                            )
+                                            edit_session.add(event)
+                                        
+                                        edit_session.add(db_app)
+                                        edit_session.commit()
+                                        st.success("Updated!")
+                                        st.rerun()
                 
                 with hd2:
                     st.markdown("### Event Log")
