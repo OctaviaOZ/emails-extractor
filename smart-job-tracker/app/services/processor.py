@@ -117,7 +117,8 @@ class ApplicationProcessor:
                     words = long.split()
                     if not words: return False
                     acronym = "".join(w[0] for w in words if w)
-                    return short == acronym
+                    # Allow exact match OR prefix match (e.g., CRF matching CRFEG)
+                    return short == acronym or (len(short) >= 3 and acronym.startswith(short))
 
                 if is_acronym(norm_new_name, norm_app_name) or is_acronym(norm_app_name, norm_new_name):
                     return True

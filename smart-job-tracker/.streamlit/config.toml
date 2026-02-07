@@ -1,2 +1,6 @@
 [browser]
 gatherUsageStats = false
+
+[client]
+# Options are: "viewer", "developer", "auto", "minimal"
+toolbarMode = "developer"

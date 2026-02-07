@@ -320,7 +320,7 @@ def main():
             df_display['Applied Date'] = pd.to_datetime(df_display['created_at']).dt.strftime('%Y-%m-%d')
             df_display['Last Update'] = pd.to_datetime(df_display['last_updated']).dt.strftime('%Y-%m-%d')
             
-            # Display main table with inline editing for Notes
+            # Display main table with inline editing for Notes and row selection
             edited_df = st.data_editor(
                 df_display[['id', 'Applied Date', 'company_name', 'position', 'status', 'Last Update', 'summary', 'notes']].sort_values(by='Last Update', ascending=False),
                 width='stretch',
@@ -337,7 +337,8 @@ def main():
                     "summary": st.column_config.Column("Summary", disabled=True),
                 },
                 key="pipeline_editor",
-                on_change=None # We will handle saving below or via a button
+                selection_mode="single-row",
+                on_select="rerun"
             )
 
             # Check for changes in the data editor and save them
@@ -451,10 +452,13 @@ def main():
     # Determine initial selection from table click (if in dashboard tab)
     company_to_show = None
     if not df.empty and 'company_name' in df.columns:
-        if 'selection' in locals() and selection and selection.selection["rows"]:
-            selected_row_idx = selection.selection["rows"][0]
-            sorted_df = df_display[['Applied Date', 'company_name', 'position', 'status', 'Last Update', 'summary']].sort_values(by='Last Update', ascending=False)
-            company_to_show = sorted_df.iloc[selected_row_idx]['company_name']
+        # st.data_editor selection is stored in st.session_state[key]["selection"]["rows"]
+        editor_state = st.session_state.get("pipeline_editor")
+        if editor_state and editor_state.get("selection") and editor_state["selection"].get("rows"):
+            selected_row_idx = editor_state["selection"]["rows"][0]
+            sorted_df = df_display.sort_values(by='Last Update', ascending=False)
+            if selected_row_idx < len(sorted_df):
+                company_to_show = sorted_df.iloc[selected_row_idx]['company_name']
 
     options = [""]
     if not df.empty and 'company_name' in df.columns:
