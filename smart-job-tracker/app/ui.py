@@ -264,33 +264,54 @@ def main():
                         st.error(f"Error: {e}")
 
     # Metrics & UI
+    if "show_all" not in st.session_state:
+        st.session_state.show_all = False
+
     with Session(engine) as session:
-        # Fetch active applications by default, or provide a toggle
-        show_all = st.checkbox("Show Inactive/Rejected Applications", value=False)
+        # Fetch all applications for global stats (metrics use this)
+        all_apps = session.exec(select(JobApplication)).all()
+        
+        # UI Control for filtering
+        st.session_state.show_all = st.checkbox(
+            "Show Inactive/Rejected Applications", 
+            value=st.session_state.show_all,
+            help="Toggle between only active processes and the full history."
+        )
+        
+        # Query for the display dataframe
         query = select(JobApplication)
-        if not show_all:
+        if not st.session_state.show_all:
             query = query.where(JobApplication.is_active == True)
         
         apps = session.exec(query).all()
     
-    # Initialize DataFrame once for all tabs and history view
+    # DataFrames
+    df_all = pd.DataFrame([a.model_dump() for a in all_apps]) if all_apps else pd.DataFrame()
     df = pd.DataFrame([a.model_dump() for a in apps]) if apps else pd.DataFrame()
         
     # --- TABS SELECTION ---
     tab_dash, tab_kanban, tab_settings = st.tabs(["📊 Dashboard", "📋 Kanban Board", "⚙️ Settings"])
 
     with tab_dash:
-        if df.empty:
+        if df_all.empty:
             st.info("No applications found. Click 'Sync' to start.")
         else:
             # Display Stats
-            c1, c2, c3, c4, c5, c6 = st.columns(6)
-            c1.metric("Active", len(df))
-            c2.metric("Pending", len(df[df['status'] == ApplicationStatus.PENDING]))
-            c3.metric("Communication", len(df[df['status'] == ApplicationStatus.COMMUNICATION]))
-            c4.metric("Interviews", len(df[df['status'] == ApplicationStatus.INTERVIEW]))
-            c5.metric("Offers", len(df[df['status'] == ApplicationStatus.OFFER]))
-            c6.metric("Rejections", len(df[df['status'] == ApplicationStatus.REJECTED]))
+            c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
+            c1.metric("Total Apps", len(df_all))
+            c2.metric("Active", len(df_all[df_all['is_active'] == True]))
+            
+            # Achievement Metrics (Ever reached)
+            interviews_count = len(df_all[df_all['reached_interview'] == True])
+            assessments_count = len(df_all[df_all['reached_assessment'] == True])
+            
+            c3.metric("Interviews 🏆", interviews_count)
+            c4.metric("Assessments 📝", assessments_count)
+            
+            # Current Ending Statuses
+            c5.metric("Offers 🎊", len(df_all[df_all['status'] == ApplicationStatus.OFFER]))
+            c6.metric("Rejected", len(df_all[df_all['status'] == ApplicationStatus.REJECTED]))
+            c7.metric("Pending", len(df_all[df_all['status'] == ApplicationStatus.PENDING]))
 
             # Dashboard Charts
             col_a, col_b = st.columns(2)
@@ -320,47 +341,87 @@ def main():
             df_display['Applied Date'] = pd.to_datetime(df_display['created_at']).dt.strftime('%Y-%m-%d')
             df_display['Last Update'] = pd.to_datetime(df_display['last_updated']).dt.strftime('%Y-%m-%d')
             
-            # Display main table with inline editing for Notes and row selection
-            edited_df = st.data_editor(
-                df_display[['id', 'Applied Date', 'company_name', 'position', 'status', 'Last Update', 'summary', 'notes']].sort_values(by='Last Update', ascending=False),
-                width='stretch',
-                hide_index=True,
-                height=400,
-                column_config={
-                    "id": None, # Hide ID column
-                    "notes": st.column_config.TextColumn("User Notes (Editable)", width="large", help="Edit your notes directly here"),
-                    "Applied Date": st.column_config.Column(disabled=True),
-                    "company_name": st.column_config.Column("Company", disabled=True),
-                    "position": st.column_config.Column("Position", disabled=True),
-                    "status": st.column_config.Column("Status", disabled=True),
-                    "Last Update": st.column_config.Column(disabled=True),
-                    "summary": st.column_config.Column("Summary", disabled=True),
-                },
-                key="pipeline_editor",
-                selection_mode="single-row",
-                on_select="rerun"
-            )
+            # --- Master-Detail View ---
+            col_table, col_quick_edit = st.columns([0.65, 0.35])
 
-            # Check for changes in the data editor and save them
-            if st.session_state.pipeline_editor and "edited_rows" in st.session_state.pipeline_editor:
-                edits = st.session_state.pipeline_editor["edited_rows"]
-                if edits:
-                    with Session(engine) as save_session:
-                        # Get the current sorted dataframe to map row indices to IDs
-                        # Fix: Must include 'Last Update' if we are sorting by it
-                        sorted_view = df_display.sort_values(by='Last Update', ascending=False)
-                        for row_idx, changes in edits.items():
-                            if "notes" in changes:
-                                app_id = int(sorted_view.iloc[row_idx]['id'])
-                                db_app = save_session.get(JobApplication, app_id)
-                                if db_app:
-                                    db_app.notes = changes["notes"]
-                                    save_session.add(db_app)
-                        save_session.commit()
-                        st.toast("Notes updated!", icon="📝")
-                        st.rerun()
+            with col_table:
+                st.dataframe(
+                    df_display[['id', 'Applied Date', 'company_name', 'position', 'status', 'Last Update', 'summary', 'notes']].sort_values(by='Last Update', ascending=False),
+                    width='stretch',
+                    hide_index=True,
+                    height=500,
+                    column_config={
+                        "id": None, # Hide ID column
+                        "notes": st.column_config.TextColumn("Notes", width="medium"),
+                        "Applied Date": st.column_config.Column(disabled=True),
+                        "company_name": st.column_config.Column("Company", disabled=True),
+                        "position": st.column_config.Column("Position", disabled=True),
+                        "status": st.column_config.Column("Status", disabled=True),
+                        "Last Update": st.column_config.Column(disabled=True),
+                        "summary": st.column_config.Column("Summary", disabled=True),
+                    },
+                    key="pipeline_editor",
+                    on_select="rerun",
+                    selection_mode="single-row"
+                )
 
-            st.caption("💡 Tip: You can edit notes directly in the table above and press Enter to save.")
+            with col_quick_edit:
+                # Handle selection logic for the quick edit panel
+                selected_app_id = None
+                editor_state = st.session_state.get("pipeline_editor")
+                if editor_state and editor_state.get("selection") and editor_state["selection"].get("rows"):
+                    idx = editor_state["selection"]["rows"][0]
+                    sorted_df = df_display.sort_values(by='Last Update', ascending=False)
+                    if idx < len(sorted_df):
+                        selected_app_id = int(sorted_df.iloc[idx]['id'])
+
+                if selected_app_id:
+                    with Session(engine) as edit_session:
+                        app_to_edit = edit_session.get(JobApplication, selected_app_id)
+                        if app_to_edit:
+                            st.markdown(f"#### 📝 Quick Edit: {app_to_edit.company_name}")
+                            with st.form("quick_edit_form", border=True):
+                                new_notes = st.text_area("Notes", value=app_to_edit.notes or "", height=200)
+                                
+                                # Status update
+                                status_vals = [s.value for s in ApplicationStatus]
+                                current_status_idx = status_vals.index(app_to_edit.status.value)
+                                new_status_val = st.selectbox("Current Status", options=status_vals, index=current_status_idx)
+                                
+                                if st.form_submit_button("Save Changes", use_container_width=True):
+                                    app_to_edit.notes = new_notes
+                                    new_status_enum = ApplicationStatus(new_status_val)
+                                    
+                                    if app_to_edit.status != new_status_enum:
+                                        old_s = app_to_edit.status
+                                        app_to_edit.status = new_status_enum
+                                        app_to_edit.last_updated = datetime.now()
+                                        
+                                        # Track milestones
+                                        if app_to_edit.status == ApplicationStatus.INTERVIEW:
+                                            app_to_edit.reached_interview = True
+                                        if app_to_edit.status == ApplicationStatus.ASSESSMENT:
+                                            app_to_edit.reached_assessment = True
+                                            
+                                        # Log event
+                                        event = ApplicationEventLog(
+                                            application_id=app_to_edit.id,
+                                            old_status=old_s,
+                                            new_status=new_status_enum,
+                                            summary="Status manually updated via Dashboard Quick Edit",
+                                            email_subject="Manual Update",
+                                            event_date=app_to_edit.last_updated
+                                        )
+                                        edit_session.add(event)
+                                    
+                                    edit_session.add(app_to_edit)
+                                    edit_session.commit()
+                                    st.toast("Updated successfully!")
+                                    st.rerun()
+                else:
+                    st.info("💡 Click a row in the table to edit notes or status.")
+
+            st.caption("💡 Tip: Select a row to see full history below.")
 
     with tab_kanban:
         if not apps:
@@ -412,6 +473,12 @@ def main():
                                         db_app.status = ApplicationStatus(new_status_val)
                                         db_app.last_updated = datetime.utcnow()
                                         
+                                        # Track milestones
+                                        if db_app.status == ApplicationStatus.INTERVIEW:
+                                            db_app.reached_interview = True
+                                        if db_app.status == ApplicationStatus.ASSESSMENT:
+                                            db_app.reached_assessment = True
+                                            
                                         # Log manual event
                                         event = ApplicationEventLog(
                                             application_id=db_app.id,

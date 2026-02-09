@@ -277,6 +277,8 @@ class ApplicationProcessor:
             summary=data.summary,
             sender_name=meta.get('sender_name'),
             sender_email=meta.get('sender_email'),
+            reached_assessment=data.status == ApplicationStatus.ASSESSMENT,
+            reached_interview=data.status == ApplicationStatus.INTERVIEW,
             year=meta.get('year', timestamp.year),
             month=meta.get('month', timestamp.month),
             day=meta.get('day', timestamp.day)
@@ -312,6 +314,12 @@ class ApplicationProcessor:
         
         if data.position and (app.position == "Unknown Position" or not app.position):
             app.position = data.position
+            
+        # Track milestones
+        if new_status == ApplicationStatus.ASSESSMENT:
+            app.reached_assessment = True
+        if new_status == ApplicationStatus.INTERVIEW:
+            app.reached_interview = True
             
         self.session.add(app)
         self.session.commit()

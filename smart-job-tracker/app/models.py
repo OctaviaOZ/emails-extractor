@@ -89,6 +89,10 @@ class JobApplication(SQLModel, table=True):
     summary: Optional[str] = None
     notes: Optional[str] = Field(default=None)
     
+    # Milestone Flags (Achievements)
+    reached_assessment: bool = Field(default=False)
+    reached_interview: bool = Field(default=False)
+    
     # Metadata for reporting
     year: int
     month: int
