@@ -101,6 +101,39 @@ class JobApplication(SQLModel, table=True):
     # Relationships
     company: Optional[Company] = Relationship(back_populates="applications")
     history: List[ApplicationEventLog] = Relationship(back_populates="application")
+    interviews: List["Interview"] = Relationship(back_populates="application", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
+    assessments: List["Assessment"] = Relationship(back_populates="application", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
+    offers: List["Offer"] = Relationship(back_populates="application", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
+
+class Interview(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    application_id: int = Field(foreign_key="jobapplication.id")
+    interview_date: datetime
+    interviewer: Optional[str] = None
+    location: Optional[str] = None
+    notes: Optional[str] = None
+    
+    application: Optional["JobApplication"] = Relationship(back_populates="interviews")
+
+class Assessment(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    application_id: int = Field(foreign_key="jobapplication.id")
+    due_date: Optional[datetime] = None
+    type: Optional[str] = None
+    notes: Optional[str] = None
+    
+    application: Optional["JobApplication"] = Relationship(back_populates="assessments")
+
+class Offer(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    application_id: int = Field(foreign_key="jobapplication.id")
+    offer_date: datetime = Field(default_factory=datetime.utcnow)
+    salary: Optional[str] = None
+    benefits: Optional[str] = None
+    deadline: Optional[datetime] = None
+    notes: Optional[str] = None
+    
+    application: Optional["JobApplication"] = Relationship(back_populates="offers")
 
 class ProcessedEmail(SQLModel, table=True):
     """Tracks every email ID we have analyzed to prevent double processing."""
