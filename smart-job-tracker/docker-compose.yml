@@ -1,0 +1,21 @@
+services:
+  app:
+    build: .
+    restart: always
+    # network_mode: host дозволяє контейнеру звертатися до вашої локальної бази на localhost:5432
+    network_mode: "host"
+    environment:
+      # Використовуйте localhost, оскільки ми в режимі host network
+      - DATABASE_URL=postgresql://user:password@localhost:5432/job_tracker
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    volumes:
+      - .:/app
+      - /app/.venv # Ізолюємо venv контейнера від локального
+      - ./models:/app/models # Для роботи локальних LLM моделей
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
