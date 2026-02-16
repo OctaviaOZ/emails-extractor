@@ -515,7 +515,7 @@ def main():
                                     if db_app:
                                         old_s = db_app.status
                                         db_app.status = ApplicationStatus(new_status_val)
-                                        db_app.last_updated = datetime.utcnow()
+                                        db_app.last_updated = datetime.now()
                                         
                                         # Track milestones
                                         if db_app.status == ApplicationStatus.INTERVIEW:

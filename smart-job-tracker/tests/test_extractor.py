@@ -1,7 +1,7 @@
 import pytest
 import os
 from unittest.mock import MagicMock, patch
-from app.services.extractor import EmailExtractor, ApplicationData, ApplicationStatus, OpenAIProvider, ClaudeProvider, LocalProvider
+from app.services.extractor import EmailExtractor, ApplicationData, ApplicationStatus, OpenAIProvider, ClaudeProvider, LocalProvider, GeminiProvider
 
 @pytest.fixture
 def mock_env_keys(monkeypatch):
@@ -11,12 +11,12 @@ def mock_env_keys(monkeypatch):
 
 def test_provider_initialization(mock_env_keys):
     extractor = EmailExtractor()
-    # Order in new code: Local, Claude, OpenAI, Gemini
+    # Order in new code: Local, Claude, Gemini, OpenAI
     assert len(extractor.providers) == 4
     assert isinstance(extractor.providers[0], LocalProvider)
     assert isinstance(extractor.providers[1], ClaudeProvider)
-    assert isinstance(extractor.providers[2], OpenAIProvider)
-    # 4th is Gemini
+    assert isinstance(extractor.providers[2], GeminiProvider)
+    assert isinstance(extractor.providers[3], OpenAIProvider)
 
 @patch("app.services.extractor.ClaudeProvider.extract")
 def test_claude_success(mock_extract, mock_env_keys):
@@ -35,29 +35,6 @@ def test_claude_success(mock_extract, mock_env_keys):
     assert result.company_name == "Claude Corp"
     mock_extract.assert_called_once()
 
-@patch("app.services.extractor.ClaudeProvider.extract")
-@patch("app.services.extractor.OpenAIProvider.extract")
-def test_failover_to_openai(mock_openai_extract, mock_claude_extract, mock_env_keys):
-    # Claude fails
-    mock_claude_extract.side_effect = Exception("Claude Down")
-    
-    # OpenAI succeeds
-    mock_openai_extract.return_value = ApplicationData(
-        company_name="OpenAI Inc",
-        position=None,
-        status=ApplicationStatus.INTERVIEW,
-        summary="Interview scheduled",
-        is_rejection=False,
-        next_step="Book time"
-    )
-    
-    extractor = EmailExtractor()
-    result = extractor.extract("Subject", "sender", "Body")
-    
-    assert result.company_name == "OpenAI Inc"
-    mock_claude_extract.assert_called_once()
-    mock_openai_extract.assert_called_once()
-
 def test_all_providers_fail():
     # No keys set, so no providers
     extractor = EmailExtractor() 
@@ -66,42 +43,32 @@ def test_all_providers_fail():
     result = extractor.extract("Application for Software Engineer received", "hr@example.com", "Body")
     
     assert isinstance(result, ApplicationData)
-    assert result.status == ApplicationStatus.PENDING # Heuristic default
+    assert result.status == ApplicationStatus.APPLIED # New Heuristic default
 
 @patch("app.services.extractor.ClaudeProvider.extract")
 @patch("app.services.extractor.OpenAIProvider.extract")
 @patch("app.services.extractor.GeminiProvider.extract")
-def test_circuit_breaker(mock_gemini, mock_openai, mock_claude, mock_env_keys):
-    # All providers fail
-    mock_claude.side_effect = Exception("Fail")
-    mock_openai.side_effect = Exception("Fail")
-    mock_gemini.side_effect = Exception("Fail")
+def test_provider_failover_and_quota_skipping(mock_gemini, mock_openai, mock_claude, mock_env_keys):
+    # Claude fails with general error
+    mock_claude.side_effect = Exception("General Fail")
+    # Gemini fails with quota error
+    mock_gemini.side_effect = Exception("Rate limit reached 429")
+    # OpenAI succeeds
+    mock_openai.return_value = ApplicationData(
+        company_name="OpenAI Inc",
+        status=ApplicationStatus.INTERVIEW,
+        is_rejection=False
+    )
     
     extractor = EmailExtractor()
-    extractor.max_failures = 2 # Lower threshold for test
     
-    # 1st Failure
-    extractor.extract("S1", "s1", "B1")
-    assert extractor.consecutive_ai_failures == 1
+    # 1st Call - Uses failover
+    result = extractor.extract("S1", "s1", "B1")
+    assert result.company_name == "OpenAI Inc"
+    assert "GeminiProvider" in extractor.failed_providers
+    assert "ClaudeProvider" not in extractor.failed_providers # General error doesn't skip
     
-    # 2nd Failure
+    # 2nd Call - Should skip Gemini
+    mock_gemini.reset_mock()
     extractor.extract("S2", "s2", "B2")
-    assert extractor.consecutive_ai_failures == 2
-    
-    # 3rd Call - Circuit Breaker should be active (>= max_failures)
-    # Providers should NOT be called again
-    mock_claude.reset_mock()
-    mock_openai.reset_mock()
-    
-    extractor.extract("S3", "s3", "B3")
-    
-    # Assert providers were NOT called
-    mock_claude.assert_not_called()
-    mock_openai.assert_not_called()
-    
-    # Failure count increments once to signal tripping, then stays
-    assert extractor.consecutive_ai_failures == 3 
-    
-    # 4th Call - Still broken
-    extractor.extract("S4", "s4", "B4")
-    mock_claude.assert_not_called()
+    mock_gemini.assert_not_called()
