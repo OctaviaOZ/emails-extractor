@@ -100,7 +100,7 @@ class JobApplication(SQLModel, table=True):
     
     # Relationships
     company: Optional[Company] = Relationship(back_populates="applications")
-    history: List[ApplicationEventLog] = Relationship(back_populates="application")
+    history: List[ApplicationEventLog] = Relationship(back_populates="application", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
     interviews: List["Interview"] = Relationship(back_populates="application", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
     assessments: List["Assessment"] = Relationship(back_populates="application", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
     offers: List["Offer"] = Relationship(back_populates="application", sa_relationship_kwargs={"cascade": "all, delete-orphan"})

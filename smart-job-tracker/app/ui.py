@@ -54,6 +54,7 @@ from app.services.processor import ApplicationProcessor
 from app.services.sync import SyncService
 from app.services.report import generate_pdf_report, generate_word_report
 from app.services.milestone_migration import migrate_milestones_to_tables
+from app.services.merge import merge_applications
 from app.models import JobApplication, ApplicationStatus, ProcessedEmail, ApplicationEventLog, Company, ProcessingLog, CompanyEmail, Interview, Assessment, Offer
 
 # --- Load Environment Variables ---
@@ -555,6 +556,38 @@ def main():
                 st.success("Settings saved successfully!")
                 st.rerun()
 
+        st.divider()
+        st.subheader("🛠️ Data Tools")
+        
+        with st.expander("🔄 Merge Duplicate Applications"):
+            st.info("Select the 'Target' application you want to keep. The 'Source' application will be merged into it (history, interviews, assessments, offers moved) and then deleted.")
+            
+            with Session(engine) as session:
+                all_apps_merge = session.exec(select(JobApplication).order_by(JobApplication.company_name)).all()
+                app_options = {f"{app.company_name} ({app.position or 'No Position'}) - ID: {app.id}": app.id for app in all_apps_merge}
+                
+                c_m1, c_m2 = st.columns(2)
+                
+                with c_m1:
+                    target_label = st.selectbox("Target (Keep this)", options=list(app_options.keys()), key="merge_target")
+                    target_id = app_options[target_label] if target_label else None
+                    
+                with c_m2:
+                    # Filter out the selected target from source options
+                    source_options = [k for k in app_options.keys() if app_options[k] != target_id]
+                    source_label = st.selectbox("Source (Merge & Delete)", options=source_options, key="merge_source")
+                    source_id = app_options[source_label] if source_label else None
+                
+                if st.button("Merge Applications", type="primary", disabled=not (target_id and source_id)):
+                    try:
+                        merge_applications(session, source_id, target_id)
+                        st.success(f"Successfully merged '{source_label}' into '{target_label}'!")
+                        st.rerun()
+                    except ValueError as ve:
+                        st.error(f"Merge failed: {ve}")
+                    except Exception as e:
+                        st.error(f"An error occurred: {e}")
+
     # --- DRILL DOWN / HISTORY VIEW ---
     st.divider()
     st.subheader("🔎 Application Details & History")
@@ -640,6 +673,19 @@ def main():
                                         edit_session.add(db_app)
                                         edit_session.commit()
                                         st.success("Updated!")
+                                        st.rerun()
+                        
+                        st.divider()
+                        with st.popover("⚠️ Danger Zone"):
+                            st.error("This will permanently delete THIS application and all its history, interviews, assessments, and offers.")
+                            confirm_delete = st.checkbox(f"I confirm I want to delete {app_details.company_name} process", key=f"conf_del_{app_details.id}")
+                            if st.button("🗑️ Delete Entire Process", type="primary", disabled=not confirm_delete):
+                                with Session(engine) as del_session:
+                                    db_app_to_del = del_session.get(JobApplication, app_details.id)
+                                    if db_app_to_del:
+                                        del_session.delete(db_app_to_del)
+                                        del_session.commit()
+                                        st.toast(f"Deleted {app_details.company_name} successfully!")
                                         st.rerun()
                 
                 with hd2:

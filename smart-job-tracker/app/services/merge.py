@@ -49,10 +49,7 @@ def merge_applications(session: Session, source_id: int, target_id: int):
 
     # 5. Merge Notes
     if source.notes:
-        merge_note = f"
-
---- Merged Data from {source.company_name} ({source.position}) ---
-{source.notes}"
+        merge_note = f"\n\n--- Merged Data from {source.company_name} ({source.position}) ---\n{source.notes}"
         if target.notes:
             target.notes += merge_note
         else:
