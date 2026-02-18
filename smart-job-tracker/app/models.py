@@ -1,7 +1,8 @@
-from typing import Optional, List, Dict
+from typing import Optional, List
 from datetime import datetime
 from sqlmodel import Field, SQLModel, Relationship
 from enum import Enum
+from app.core.constants import STATUS_RANK
 
 class ApplicationStatus(str, Enum):
     APPLIED = "APPLIED"
@@ -16,9 +17,6 @@ class ApplicationStatus(str, Enum):
     @classmethod
     def all_values(cls) -> List[str]:
         return [s.value for s in cls]
-
-# Progression order: higher rank updates lower rank
-from app.core.constants import STATUS_RANK
 
 class ApplicationEventLog(SQLModel, table=True):
     """Tracks the history of status changes for an application."""

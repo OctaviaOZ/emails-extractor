@@ -4,10 +4,8 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
 from datetime import datetime
-import os
 from app.models import ApplicationStatus
 from docx import Document
-from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 def get_status_label(status, mapping=None):
@@ -39,8 +37,10 @@ def filter_applications_by_date(applications, start_date=None, end_date=None):
     
     # Ensure start/end are timezone-naive or aware matching the app dates
     # Assuming app.last_updated is naive UTC as per models.py
-    if start.tzinfo: start = start.replace(tzinfo=None)
-    if end.tzinfo: end = end.replace(tzinfo=None)
+    if start.tzinfo:
+        start = start.replace(tzinfo=None)
+    if end.tzinfo:
+        end = end.replace(tzinfo=None)
     
     # Make end date inclusive (end of day)
     end = end.replace(hour=23, minute=59, second=59)
@@ -120,7 +120,7 @@ def generate_word_report(applications, output_filename, start_date=None, end_dat
     doc = Document()
     
     # Title
-    title = doc.add_heading(f"Bewerbungsbericht", 0)
+    title = doc.add_heading("Bewerbungsbericht", 0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     
     # Date Range Subtitle

@@ -15,7 +15,7 @@ def render_dashboard(apps, df_all, df):
         # Display Stats
         c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
         c1.metric("Total Apps", len(df_all))
-        c2.metric("Active", len(df_all[df_all['is_active'] == True]))
+        c2.metric("Active", len(df_all[df_all['is_active']]))
         
         # Achievement Metrics (Now linked to tables)
         total_interviews = session.exec(select(Interview)).all()

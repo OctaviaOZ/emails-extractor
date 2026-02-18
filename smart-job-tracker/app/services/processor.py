@@ -1,7 +1,7 @@
 from sqlmodel import Session, select
 from datetime import datetime
 import re
-from typing import Optional, Dict, Tuple, List, Set
+from typing import Optional, Dict, Tuple
 from app.models import JobApplication, ApplicationEventLog, ApplicationStatus, Company, CompanyEmail
 from app.services.extractor import ApplicationData
 from app.core.constants import (
@@ -113,9 +113,11 @@ class ApplicationProcessor:
 
     def _is_acronym_match(self, name1: str, name2: str) -> bool:
         def check(short, long):
-            if not short or not long or len(short) < 2: return False
+            if not short or not long or len(short) < 2:
+                return False
             words = long.split()
-            if not words: return False
+            if not words:
+                return False
             acronym = "".join(w[0] for w in words if w)
             return short == acronym or (len(short) >= 3 and acronym.startswith(short))
         return check(name1, name2) or check(name2, name1)

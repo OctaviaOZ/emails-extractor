@@ -1,5 +1,4 @@
 import streamlit as st
-import os
 from datetime import datetime
 from sqlmodel import Session, select, delete
 from app.models import JobApplication, ApplicationEventLog, ProcessedEmail, Company, CompanyEmail, ProcessingLog
@@ -115,8 +114,10 @@ def _generate_pdf(date_range):
             start_date = None
             end_date = None
             if isinstance(date_range, tuple):
-                if len(date_range) > 0: start_date = date_range[0]
-                if len(date_range) > 1: end_date = date_range[1]
+                if len(date_range) > 0:
+                    start_date = date_range[0]
+                if len(date_range) > 1:
+                    end_date = date_range[1]
                 
             # Convert settings to dict for compatibility or update generate_pdf_report to use settings
             # Using settings.model_dump() as config
@@ -137,8 +138,10 @@ def _generate_word(date_range):
             start_date = None
             end_date = None
             if isinstance(date_range, tuple):
-                if len(date_range) > 0: start_date = date_range[0]
-                if len(date_range) > 1: end_date = date_range[1]
+                if len(date_range) > 0:
+                    start_date = date_range[0]
+                if len(date_range) > 1:
+                    end_date = date_range[1]
             
             config_dict = settings.model_dump()
             

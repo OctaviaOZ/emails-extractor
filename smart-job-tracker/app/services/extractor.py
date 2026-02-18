@@ -3,7 +3,7 @@ import logging
 import re
 import json
 from abc import ABC, abstractmethod
-from typing import Optional, Any, Dict, Set
+from typing import Optional, Any, Dict, Set, List
 from pydantic import BaseModel, Field, model_validator
 from app.models import ApplicationStatus
 from app.core.config import settings
@@ -48,7 +48,7 @@ try:
                             undefined=llama_chat_format.jinja2.StrictUndefined
                         )
                         self._template = self._environment.from_string(self.template)
-                except:
+                except Exception:
                     pass
 
     llama_chat_format.Jinja2ChatFormatter = LenientJinja2ChatFormatter
@@ -402,6 +402,6 @@ class EmailExtractor:
         return ApplicationData(
             company_name=company, 
             status=ApplicationStatus.APPLIED, 
-            summary=f"Extracted via heuristics",
+            summary="Extracted via heuristics",
             is_rejection=False
         )

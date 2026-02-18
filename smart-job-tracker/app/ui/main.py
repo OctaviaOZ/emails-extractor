@@ -68,7 +68,7 @@ def main():
         # Query for the display dataframe
         query = select(JobApplication)
         if not st.session_state.show_all:
-            query = query.where(JobApplication.is_active == True)
+            query = query.where(JobApplication.is_active)
         
         apps = session.exec(query).all()
     

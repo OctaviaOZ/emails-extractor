@@ -13,7 +13,7 @@ def migrate_milestones_to_tables(session: Session):
     
     # 1. Migrate Interviews
     # Find apps with the flag but no entry in the Interview table
-    stmt_i = select(JobApplication).where(JobApplication.reached_interview == True)
+    stmt_i = select(JobApplication).where(JobApplication.reached_interview)
     apps_i = session.exec(stmt_i).all()
     count_i = 0
     for app in apps_i:
@@ -28,7 +28,7 @@ def migrate_milestones_to_tables(session: Session):
             count_i += 1
             
     # 2. Migrate Assessments
-    stmt_a = select(JobApplication).where(JobApplication.reached_assessment == True)
+    stmt_a = select(JobApplication).where(JobApplication.reached_assessment)
     apps_a = session.exec(stmt_a).all()
     count_a = 0
     for app in apps_a:
