@@ -18,16 +18,7 @@ class ApplicationStatus(str, Enum):
         return [s.value for s in cls]
 
 # Progression order: higher rank updates lower rank
-STATUS_RANK: Dict[ApplicationStatus, int] = {
-    ApplicationStatus.UNKNOWN: 0,
-    ApplicationStatus.APPLIED: 1,
-    ApplicationStatus.PENDING: 2,
-    ApplicationStatus.COMMUNICATION: 2,
-    ApplicationStatus.ASSESSMENT: 3,
-    ApplicationStatus.INTERVIEW: 4,
-    ApplicationStatus.REJECTED: 5,
-    ApplicationStatus.OFFER: 6
-}
+from app.core.constants import STATUS_RANK
 
 class ApplicationEventLog(SQLModel, table=True):
     """Tracks the history of status changes for an application."""

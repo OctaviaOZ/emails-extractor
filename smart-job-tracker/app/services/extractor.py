@@ -2,12 +2,12 @@ import os
 import logging
 import re
 import json
-import time
-import gc
 from abc import ABC, abstractmethod
-from typing import Optional, Any, Dict, List, Set
+from typing import Optional, Any, Dict, Set
 from pydantic import BaseModel, Field, model_validator
 from app.models import ApplicationStatus
+from app.core.config import settings
+from app.core.constants import PLATFORM_NAMES, GENERIC_NAMES, GENERIC_DOMAINS
 
 # Import SDKs lazily or with error handling
 try:
@@ -31,7 +31,6 @@ try:
     class LenientJinja2ChatFormatter(llama_chat_format.Jinja2ChatFormatter):
         """Custom Jinja2 formatter to handle problematic GGUF templates."""
         def __init__(self, template: str, eos_token: str, bos_token: str, **kwargs):
-            # Strip {% generation %} tags which are common in new HF models but unknown to standard Jinja2
             clean_template = template.replace("{% generation %}", "").replace("{% endgeneration %}", "")
             try:
                 super().__init__(clean_template, eos_token, bos_token, **kwargs)
@@ -137,8 +136,8 @@ class LocalProvider(LLMProvider):
             return self._load_fallback()
 
     def _load_fallback(self) -> Any:
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        fallback_path = os.path.join(base_dir, "models", "Llama-3.2-3B-Instruct-Q4_K_M.gguf")
+        # Use settings base dir
+        fallback_path = os.path.join(settings.base_dir, "models", "Llama-3.2-3B-Instruct-Q4_K_M.gguf")
         
         if not os.path.exists(fallback_path):
             raise FileNotFoundError(f"Fallback model not found at {fallback_path}")
@@ -192,8 +191,8 @@ class LocalProvider(LLMProvider):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content}
             ],
-            max_tokens=512,
-            temperature=0.1,
+            max_tokens=settings.ai.max_tokens,
+            temperature=settings.ai.temperature,
             grammar=grammar
         )
         
@@ -259,19 +258,16 @@ class GeminiProvider(LLMProvider):
 class EmailExtractor:
     """Orchestrates data extraction using multiple LLM providers with failover."""
     def __init__(self, config: Optional[Dict[str, Any]] = None):
-        self.config = config or {}
+        # config is now largely unused but kept for interface compatibility if needed
         self.providers: List[LLMProvider] = []
         self.failed_providers: Set[str] = set()
         
         self._init_providers()
 
     def _init_providers(self):
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        
         # 1. Local Provider
-        local_cfg = self.config.get('ai', {})
-        model_name = local_cfg.get('local_model_name', "Llama-3.2-3B-Instruct-Q4_K_M.gguf")
-        model_path = os.path.join(base_dir, "models", model_name)
+        model_name = settings.ai.local_model_name
+        model_path = os.path.join(settings.base_dir, "models", model_name)
         
         if os.path.exists(model_path):
             try:
@@ -280,12 +276,12 @@ class EmailExtractor:
                 logger.error(f"Failed to init Local Provider: {e}")
 
         # 2. Cloud Providers
-        if k := os.getenv("ANTHROPIC_API_KEY"):
-            self.providers.append(ClaudeProvider(k))
-        if k := os.getenv("GOOGLE_API_KEY"):
-            self.providers.append(GeminiProvider(k))
-        if k := os.getenv("OPENAI_API_KEY"):
-            self.providers.append(OpenAIProvider(k))
+        if settings.anthropic_api_key:
+            self.providers.append(ClaudeProvider(settings.anthropic_api_key))
+        if settings.google_api_key:
+            self.providers.append(GeminiProvider(settings.google_api_key))
+        if settings.openai_api_key:
+            self.providers.append(OpenAIProvider(settings.openai_api_key))
 
     def extract(self, subject: str, sender: str, body_text: str, body_html: str = "") -> ApplicationData:
         effective_body = body_html if body_html else body_text
@@ -313,7 +309,7 @@ class EmailExtractor:
         return self._refine_status(result, subject, body_text)
 
     def _refine_company(self, data: ApplicationData, sender: str, text: str) -> ApplicationData:
-        platforms = self.config.get('extraction', {}).get('platforms', [])
+        platforms = settings.extraction.platforms
         
         if any(p.lower() in data.company_name.lower() for p in platforms):
             data.company_name = "Unknown"
@@ -330,18 +326,17 @@ class EmailExtractor:
 
     def _refine_status(self, data: ApplicationData, subject: str, text: str) -> ApplicationData:
         search_text = (subject + " " + text).lower()
-        kw_cfg = self.config.get('status_keywords', {})
-
-        if any(w.lower() in search_text for w in kw_cfg.get('rejected', [])):
+        
+        if any(w.lower() in search_text for w in settings.status_keywords.rejected):
             data.status = ApplicationStatus.REJECTED
             data.is_rejection = True
             return data
 
-        if any(w.lower() in search_text for w in kw_cfg.get('assessment', [])):
+        if any(w.lower() in search_text for w in settings.status_keywords.assessment):
             data.status = ApplicationStatus.ASSESSMENT
             return data
 
-        applied_kws = kw_cfg.get('applied', [])
+        applied_kws = settings.status_keywords.applied
         if any(w.lower() in search_text for w in applied_kws):
             weak_statuses = [ApplicationStatus.PENDING, ApplicationStatus.COMMUNICATION, ApplicationStatus.UNKNOWN]
             if data.status in weak_statuses:
@@ -351,20 +346,21 @@ class EmailExtractor:
         if data.status not in [ApplicationStatus.APPLIED, ApplicationStatus.PENDING, ApplicationStatus.COMMUNICATION, ApplicationStatus.UNKNOWN]:
             return data
 
-        if any(w.lower() in search_text for w in kw_cfg.get('offer', [])):
+        if any(w.lower() in search_text for w in settings.status_keywords.offer):
             data.status = ApplicationStatus.OFFER
             return data
 
-        if any(w.lower() in search_text for w in kw_cfg.get('interview', [])):
+        if any(w.lower() in search_text for w in settings.status_keywords.interview):
             data.status = ApplicationStatus.INTERVIEW
             return data
 
         return data
 
     def _extract_heuristic(self, subject: str, sender: str, text: str) -> ApplicationData:
-        extraction_cfg = self.config.get('extraction', {})
-        platforms = set(extraction_cfg.get('platforms', []))
-        ignore_names = set(extraction_cfg.get('generic_names', []))
+        platforms = set(settings.extraction.platforms)
+        ignore_names = set(settings.extraction.generic_names)
+        # Add constants if not already in config
+        ignore_names.update(GENERIC_NAMES)
         ignore_names.update(platforms)
         
         company = "Unknown"
@@ -379,27 +375,27 @@ class EmailExtractor:
         if '@' in email_addr:
             domain = email_addr.split('@')[1].lower()
 
-        is_platform = any(p in domain for p in platforms) or domain in ['gmail.com', 'yahoo.com', 'outlook.com', 'successfactors.eu', 'successfactors.com', 'greenhouse.io', 'myworkday.com']
+        is_platform = any(p.lower() in domain for p in platforms) or domain in GENERIC_DOMAINS or any(p in domain for p in PLATFORM_NAMES)
 
         if (is_platform or company == "Unknown") and sender_name:
             clean_name = re.sub(r'(?i)\s+(hiring|team|recruiting|careers|jobs|notifications|via|bewerbermanagement|career|system|hr).*', '', sender_name).strip()
-            if clean_name and clean_name.lower() not in ignore_names:
+            if clean_name and clean_name.lower() not in [n.lower() for n in ignore_names]:
                 company = clean_name
 
         if company == "Unknown" and text:
             body_match = re.search(r'(?i)\s+at\s+([A-Z][A-Za-z0-9\s&]{2,50})(?:\s+Corporate|SE|GmbH|AG|Inc|\.|\s|$)', text[:500])
             if body_match:
                 potential = body_match.group(1).strip()
-                if potential.lower() not in ignore_names and not any(p in potential.lower() for p in platforms):
+                if potential.lower() not in [n.lower() for n in ignore_names] and not any(p.lower() in potential.lower() for p in platforms):
                     company = potential
 
         if company == "Unknown":
-            for entry in extraction_cfg.get('subject_patterns', []):
+            for entry in settings.extraction.subject_patterns:
                 m = re.search(entry.get('pattern', ''), subject)
                 if m:
                     res = m.group(entry.get('group', 1)).strip()
                     res = re.sub(r'(?i)\s+(application|role|job|position|update).*', '', res).strip()
-                    if res.lower() not in ignore_names:
+                    if res.lower() not in [n.lower() for n in ignore_names]:
                         company = res
                         break
 

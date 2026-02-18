@@ -9,16 +9,16 @@ from app.models import ProcessedEmail
 from app.services.gmail import batch_get_message_bodies, clean_html_for_llm
 from app.services.extractor import EmailExtractor
 from app.services.processor import ApplicationProcessor
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 class SyncService:
     """Orchestrates the synchronization between Gmail and the local database."""
-    def __init__(self, session: Session, config: Dict, extractor: EmailExtractor):
+    def __init__(self, session: Session, extractor: EmailExtractor):
         self.session = session
-        self.config = config
         self.extractor = extractor
-        self.processor = ApplicationProcessor(session, config=config)
+        self.processor = ApplicationProcessor(session)
 
     def run_sync(self, service: Any, query: str, progress_callback: Optional[Callable[[float, str], None]] = None) -> Tuple[int, int]:
         """Runs the full sync process using batch fetching."""
@@ -94,13 +94,10 @@ class SyncService:
         """Processes a single email message."""
         msg_id = full_msg['id']
         try:
-            skip_emails = self.config.get('skip_emails', [])
-            skip_domains = self.config.get('skip_domains', [])
-
             sender_full = full_msg.get('sender', '')
             sender_name, sender_email = self._parse_sender(sender_full)
 
-            if self._should_skip(sender_email, skip_emails, skip_domains):
+            if self._should_skip(sender_email):
                 self._mark_processed(msg_id, "Skipped")
                 return True
 
@@ -143,10 +140,10 @@ class SyncService:
                 sender_email = sender_email.strip()
         return sender_name, sender_email
 
-    def _should_skip(self, email: str, skip_emails: List[str], skip_domains: List[str]) -> bool:
+    def _should_skip(self, email: str) -> bool:
         email_lower = email.lower()
-        return any(e.lower() in email_lower for e in skip_emails) or \
-               any(d.lower() in email_lower for d in skip_domains)
+        return any(e.lower() in email_lower for e in settings.skip_emails) or \
+               any(d.lower() in email_lower for d in settings.skip_domains)
 
     def _parse_date(self, full_msg: Dict) -> datetime:
         if full_msg.get('internalDate'):

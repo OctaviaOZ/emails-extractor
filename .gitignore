@@ -3,6 +3,7 @@
 # IDE
 .idea/
 .vscode/
+.gemini/
 
 # Logs
 *.log
@@ -26,7 +27,4 @@ start_app.sh
 __pycache__/
 
 models/
-
-SENIOR_ENGINEER_GUIDE.md
-OPTIMIZATION_LOG.md
-MODEL_ENHANCEMENTS.md
+docs/

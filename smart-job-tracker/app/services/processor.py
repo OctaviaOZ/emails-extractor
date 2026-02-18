@@ -2,17 +2,19 @@ from sqlmodel import Session, select
 from datetime import datetime
 import re
 from typing import Optional, Dict, Tuple, List, Set
-from app.models import JobApplication, ApplicationEventLog, ApplicationStatus, STATUS_RANK, Company, CompanyEmail
+from app.models import JobApplication, ApplicationEventLog, ApplicationStatus, Company, CompanyEmail
 from app.services.extractor import ApplicationData
+from app.core.constants import (
+    COMPANY_SUFFIXES, SHARED_EMAILS, SHARED_PLATFORMS, GENERIC_DOMAINS
+)
 import logging
 
 logger = logging.getLogger(__name__)
 
 class ApplicationProcessor:
     """Processes extracted email data and updates the job application database."""
-    def __init__(self, session: Session, config: Optional[Dict] = None):
+    def __init__(self, session: Session):
         self.session = session
-        self.config = config or {}
 
     def _normalize_company(self, name: str) -> str:
         """Normalizes company names for better matching."""
@@ -22,18 +24,11 @@ class ApplicationProcessor:
         name = name.lower()
         name = re.sub(r'[^\w\s]', '', name)
         
-        suffixes = [
-            'gmbh', 'ag', 'inc', 'ltd', 'co', 'kg', 'plc', 'se', 'corp', 'corporation', 
-            'holding', 'group', 'germany', 'deutschland', 'berlin', 'europe', 'emea', 
-            'international', 'solutions', 'systems', 'technology', 'technologies',
-            'successfactors', 'workday', 'greenhouse'
-        ]
-        
         changed = True
         while changed:
             changed = False
             name = name.strip()
-            for suffix in suffixes:
+            for suffix in COMPANY_SUFFIXES:
                 pattern = rf'\s+{suffix}$'
                 if re.search(pattern, name):
                     name = re.sub(pattern, '', name)
@@ -108,20 +103,13 @@ class ApplicationProcessor:
         return None, False
 
     def _is_shared_email(self, email: str) -> bool:
-        shared_emails = {
-            'notifications@smartrecruiters.com', 
-            'no-reply@successfactors.com', 
-            'noreply@myworkday.com'
-        }
-        return email in shared_emails
+        return email in SHARED_EMAILS
 
     def _is_shared_domain(self, domain: str) -> bool:
-        shared_platform_anchors = {'myworkdayjobs.com', 'successfactors.eu', 'successfactors.com', 'greenhouse.io', 'smartrecruiters.com'}
-        return domain in shared_platform_anchors
+        return domain in SHARED_PLATFORMS
 
     def _is_generic_domain(self, domain: str) -> bool:
-        generic_domains = {'gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'icloud.com', 'me.com', 'live.com', 'msn.com'}
-        return domain in generic_domains
+        return domain in GENERIC_DOMAINS
 
     def _is_acronym_match(self, name1: str, name2: str) -> bool:
         def check(short, long):
