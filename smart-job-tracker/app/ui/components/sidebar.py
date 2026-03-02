@@ -1,5 +1,5 @@
 import streamlit as st
-from datetime import datetime
+from datetime import datetime, UTC
 from sqlmodel import Session, select, delete
 from app.models import JobApplication, ApplicationEventLog, ProcessedEmail, Company, CompanyEmail, ProcessingLog
 from app.services.report import generate_pdf_report, generate_word_report
@@ -22,8 +22,8 @@ def render_sidebar():
         st.subheader("Reports")
         
         # Date Range Picker
-        today = datetime.now()
-        start_of_year = datetime(today.year, 1, 1)
+        today = datetime.now(UTC)
+        start_of_year = datetime(today.year, 1, 1, tzinfo=UTC)
         
         date_range = st.date_input(
             "Report Period",
@@ -176,7 +176,7 @@ def _download_csv():
             st.download_button(
                 label="Click to Download CSV",
                 data=csv_file,
-                file_name=f"full_application_history_{datetime.now().strftime('%Y%m%d')}.csv",
+                file_name=f"full_application_history_{datetime.now(UTC).strftime('%Y%m%d')}.csv",
                 mime='text/csv'
             )
         else:

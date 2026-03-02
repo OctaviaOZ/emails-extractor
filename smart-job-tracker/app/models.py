@@ -1,22 +1,8 @@
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, UTC
 from sqlmodel import Field, SQLModel, Relationship
 from enum import Enum
-from app.core.constants import STATUS_RANK
-
-class ApplicationStatus(str, Enum):
-    APPLIED = "APPLIED"
-    INTERVIEW = "INTERVIEW"
-    ASSESSMENT = "ASSESSMENT"
-    PENDING = "PENDING"
-    COMMUNICATION = "COMMUNICATION"
-    OFFER = "OFFER"
-    REJECTED = "REJECTED"
-    UNKNOWN = "UNKNOWN"
-
-    @classmethod
-    def all_values(cls) -> List[str]:
-        return [s.value for s in cls]
+from app.core.constants import STATUS_RANK, ApplicationStatus
 
 class ApplicationEventLog(SQLModel, table=True):
     """Tracks the history of status changes for an application."""
@@ -26,7 +12,7 @@ class ApplicationEventLog(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     application_id: int = Field(foreign_key="jobapplication.id")
     
-    event_date: datetime = Field(default_factory=datetime.utcnow)
+    event_date: datetime = Field(default_factory=lambda: datetime.now(UTC))
     old_status: Optional[ApplicationStatus] = None
     new_status: ApplicationStatus
     summary: str
@@ -77,8 +63,8 @@ class JobApplication(SQLModel, table=True):
     sender_email: Optional[str] = None
     
     # Dates
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    last_updated: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    last_updated: datetime = Field(default_factory=lambda: datetime.now(UTC))
     
     # Latest email details
     email_id: Optional[str] = Field(default=None)
@@ -141,7 +127,7 @@ class Assessment(SQLModel, table=True):
 class Offer(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     application_id: int = Field(foreign_key="jobapplication.id")
-    offer_date: datetime = Field(default_factory=datetime.utcnow)
+    offer_date: datetime = Field(default_factory=lambda: datetime.now(UTC))
     salary: Optional[str] = None
     benefits: Optional[str] = None
     deadline: Optional[datetime] = None
@@ -154,13 +140,13 @@ class ProcessedEmail(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
     email_id: str = Field(primary_key=True)
     company_name: str
-    processed_at: datetime = Field(default_factory=datetime.utcnow)
+    processed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 class ProcessingLog(SQLModel, table=True):
     """Logs the results of sync runs."""
     __table_args__ = {"extend_existing": True}
     id: Optional[int] = Field(default=None, primary_key=True)
-    run_date: datetime = Field(default_factory=datetime.utcnow)
+    run_date: datetime = Field(default_factory=lambda: datetime.now(UTC))
     emails_processed: int
     emails_new: int
     errors: int

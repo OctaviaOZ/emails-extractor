@@ -2,10 +2,10 @@ from sqlmodel import Session, select
 from datetime import datetime
 import re
 from typing import Optional, Dict, Tuple
-from app.models import JobApplication, ApplicationEventLog, ApplicationStatus, Company, CompanyEmail
+from app.models import JobApplication, ApplicationEventLog, Company, CompanyEmail
 from app.services.extractor import ApplicationData
 from app.core.constants import (
-    COMPANY_SUFFIXES, SHARED_EMAILS, SHARED_PLATFORMS, GENERIC_DOMAINS
+    COMPANY_SUFFIXES, SHARED_EMAILS, SHARED_PLATFORMS, GENERIC_DOMAINS, ApplicationStatus
 )
 import logging
 
@@ -13,8 +13,9 @@ logger = logging.getLogger(__name__)
 
 class ApplicationProcessor:
     """Processes extracted email data and updates the job application database."""
-    def __init__(self, session: Session):
+    def __init__(self, session: Session, config: Optional[Dict] = None):
         self.session = session
+        self.config = config or {}
 
     def _normalize_company(self, name: str) -> str:
         """Normalizes company names for better matching."""

@@ -1,5 +1,19 @@
 from typing import List, Set, Dict
-from app.models import ApplicationStatus
+from enum import Enum
+
+class ApplicationStatus(str, Enum):
+    APPLIED = "APPLIED"
+    INTERVIEW = "INTERVIEW"
+    ASSESSMENT = "ASSESSMENT"
+    PENDING = "PENDING"
+    COMMUNICATION = "COMMUNICATION"
+    OFFER = "OFFER"
+    REJECTED = "REJECTED"
+    UNKNOWN = "UNKNOWN"
+
+    @classmethod
+    def all_values(cls) -> List[str]:
+        return [s.value for s in cls]
 
 # --- Application Status ---
 STATUS_RANK: Dict[ApplicationStatus, int] = {

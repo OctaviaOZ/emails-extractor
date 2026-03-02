@@ -1,5 +1,6 @@
 from sqlmodel import Session, select
-from app.models import JobApplication, Interview, Assessment, Offer, ApplicationStatus
+from app.models import JobApplication, Interview, Assessment, Offer
+from app.core.constants import ApplicationStatus
 import logging
 
 logger = logging.getLogger(__name__)

@@ -2,9 +2,14 @@ import pytest
 import os
 from unittest.mock import MagicMock, patch
 from app.services.extractor import EmailExtractor, ApplicationData, ApplicationStatus, OpenAIProvider, ClaudeProvider, LocalProvider, GeminiProvider
+from app.core.config import settings
 
 @pytest.fixture
 def mock_env_keys(monkeypatch):
+    monkeypatch.setattr(settings, "openai_api_key", "sk-test-openai")
+    monkeypatch.setattr(settings, "anthropic_api_key", "sk-test-anthropic")
+    monkeypatch.setattr(settings, "google_api_key", "sk-test-google")
+    # Also set env vars just in case other things use them
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-openai")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-anthropic")
     monkeypatch.setenv("GOOGLE_API_KEY", "sk-test-google")

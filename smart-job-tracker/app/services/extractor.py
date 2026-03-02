@@ -5,9 +5,8 @@ import json
 from abc import ABC, abstractmethod
 from typing import Optional, Any, Dict, Set, List
 from pydantic import BaseModel, Field, model_validator
-from app.models import ApplicationStatus
 from app.core.config import settings
-from app.core.constants import PLATFORM_NAMES, GENERIC_NAMES, GENERIC_DOMAINS
+from app.core.constants import PLATFORM_NAMES, GENERIC_NAMES, GENERIC_DOMAINS, ApplicationStatus
 
 # Import SDKs lazily or with error handling
 try:

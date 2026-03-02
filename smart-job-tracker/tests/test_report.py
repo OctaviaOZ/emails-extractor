@@ -1,5 +1,5 @@
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from app.services.report import filter_applications_by_date, generate_word_report
 from app.models import JobApplication, ApplicationStatus
 import os
@@ -21,7 +21,7 @@ class MockApp:
         }
 
 def test_filter_applications_by_date():
-    today = datetime.now()
+    today = datetime.now(UTC)
     yesterday = today - timedelta(days=1)
     last_week = today - timedelta(days=7)
     
@@ -54,8 +54,8 @@ def test_filter_applications_by_date():
 
 def test_generate_word_report_creates_file(tmp_path):
     apps = [
-        MockApp("Company A", datetime.now()),
-        MockApp("Company B", datetime.now())
+        MockApp("Company A", datetime.now(UTC)),
+        MockApp("Company B", datetime.now(UTC))
     ]
     
     output_file = tmp_path / "test_report.docx"

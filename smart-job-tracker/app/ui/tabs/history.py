@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, UTC
 from sqlmodel import Session, select
 from app.models import JobApplication, ApplicationEventLog, ApplicationStatus, Interview, Assessment, Offer
 from app.core.database import engine
@@ -102,7 +102,7 @@ def _render_edit_form(session, app_details):
                 if db_app.status != new_status_enum:
                     old_status = db_app.status
                     db_app.status = new_status_enum
-                    db_app.last_updated = datetime.now()
+                    db_app.last_updated = datetime.now(UTC)
                     
                     event = ApplicationEventLog(
                         application_id=db_app.id,
@@ -157,7 +157,7 @@ def _render_interviews(session, app_details):
             if st.form_submit_button("Add Interview"):
                 new_i = Interview(
                     application_id=app_details.id,
-                    interview_date=datetime.combine(i_date, i_time),
+                    interview_date=datetime.combine(i_date, i_time).replace(tzinfo=UTC),
                     interviewer=i_interviewer,
                     location=i_location,
                     notes=i_notes
@@ -184,7 +184,7 @@ def _render_interviews(session, app_details):
                     
                     c1, c2 = st.columns(2)
                     if c1.form_submit_button("Save Changes"):
-                        interview.interview_date = datetime.combine(e_date, e_time)
+                        interview.interview_date = datetime.combine(e_date, e_time).replace(tzinfo=UTC)
                         interview.interviewer = e_interviewer
                         interview.location = e_location
                         interview.notes = e_notes
@@ -212,7 +212,7 @@ def _render_assessments(session, app_details):
             if st.form_submit_button("Add Assessment"):
                 new_a = Assessment(
                     application_id=app_details.id,
-                    due_date=datetime.combine(a_date, datetime.min.time()),
+                    due_date=datetime.combine(a_date, datetime.min.time()).replace(tzinfo=UTC),
                     type=a_type,
                     notes=a_notes
                 )
@@ -226,13 +226,13 @@ def _render_assessments(session, app_details):
             title = f"{assessment.type or 'Assessment'} - Due: {assessment.due_date.strftime('%Y-%m-%d') if assessment.due_date else 'N/A'}"
             with st.expander(title):
                 with st.form(f"edit_assessment_{assessment.id}"):
-                    e_date = st.date_input("Due Date", value=assessment.due_date.date() if assessment.due_date else datetime.now().date())
+                    e_date = st.date_input("Due Date", value=assessment.due_date.date() if assessment.due_date else datetime.now(UTC).date())
                     e_type = st.text_input("Type", value=assessment.type or "")
                     e_notes = st.text_area("Notes", value=assessment.notes or "")
                     
                     c1, c2 = st.columns(2)
                     if c1.form_submit_button("Save Changes"):
-                        assessment.due_date = datetime.combine(e_date, datetime.min.time())
+                        assessment.due_date = datetime.combine(e_date, datetime.min.time()).replace(tzinfo=UTC)
                         assessment.type = e_type
                         assessment.notes = e_notes
                         session.add(assessment)
@@ -261,10 +261,10 @@ def _render_offers(session, app_details):
             if st.form_submit_button("Add Offer"):
                 new_o = Offer(
                     application_id=app_details.id,
-                    offer_date=datetime.combine(o_date, datetime.min.time()),
+                    offer_date=datetime.combine(o_date, datetime.min.time()).replace(tzinfo=UTC),
                     salary=o_salary,
                     benefits=o_benefits,
-                    deadline=datetime.combine(o_deadline, datetime.min.time()),
+                    deadline=datetime.combine(o_deadline, datetime.min.time()).replace(tzinfo=UTC),
                     notes=o_notes
                 )
                 session.add(new_o)
@@ -279,15 +279,15 @@ def _render_offers(session, app_details):
                     e_date = st.date_input("Offer Date", value=offer.offer_date.date())
                     e_salary = st.text_input("Salary", value=offer.salary or "")
                     e_benefits = st.text_area("Benefits", value=offer.benefits or "")
-                    e_deadline = st.date_input("Deadline", value=offer.deadline.date() if offer.deadline else datetime.now().date())
+                    e_deadline = st.date_input("Deadline", value=offer.deadline.date() if offer.deadline else datetime.now(UTC).date())
                     e_notes = st.text_area("Notes", value=offer.notes or "")
                     
                     c1, c2 = st.columns(2)
                     if c1.form_submit_button("Save Changes"):
-                        offer.offer_date = datetime.combine(e_date, datetime.min.time())
+                        offer.offer_date = datetime.combine(e_date, datetime.min.time()).replace(tzinfo=UTC)
                         offer.salary = e_salary
                         offer.benefits = e_benefits
-                        offer.deadline = datetime.combine(e_deadline, datetime.min.time())
+                        offer.deadline = datetime.combine(e_deadline, datetime.min.time()).replace(tzinfo=UTC)
                         offer.notes = e_notes
                         session.add(offer)
                         session.commit()

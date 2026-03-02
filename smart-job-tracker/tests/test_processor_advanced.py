@@ -1,5 +1,5 @@
 import pytest
-from datetime import datetime
+from datetime import datetime, UTC
 from unittest.mock import MagicMock
 from sqlmodel import Session, select
 from app.services.processor import ApplicationProcessor
@@ -52,7 +52,7 @@ def test_process_new_application_creates_company(processor, session):
         'id': 'msg1',
         'sender_email': 'hr@newcorp.com'
     }
-    timestamp = datetime.now()
+    timestamp = datetime.now(UTC)
     
     processor.process_extraction(data, email_meta, timestamp)
     
@@ -79,6 +79,6 @@ def test_process_extraction_upgrades_unknown_name(processor, session):
     )
     email_meta = {'subject': 'Sub', 'id': 'msg2', 'sender_email': 'hr@realcorp.com'}
     
-    processor.process_extraction(data, email_meta, datetime.now())
+    processor.process_extraction(data, email_meta, datetime.now(UTC))
     
     assert existing_app.company_name == "RealCorp"

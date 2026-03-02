@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime
+from datetime import datetime, UTC
 from sqlmodel import Session, select
 from app.models import JobApplication, ApplicationStatus, Interview, Assessment, Offer, ApplicationEventLog
 from app.core.database import engine
@@ -156,7 +156,7 @@ def _render_quick_edit(df_display):
                         if app_to_edit.status != new_status_enum:
                             old_s = app_to_edit.status
                             app_to_edit.status = new_status_enum
-                            app_to_edit.last_updated = datetime.now()
+                            app_to_edit.last_updated = datetime.now(UTC)
                             
                             # Track milestones
                             if app_to_edit.status == ApplicationStatus.INTERVIEW:

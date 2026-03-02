@@ -1,5 +1,5 @@
 import streamlit as st
-from datetime import datetime
+from datetime import datetime, UTC
 from sqlmodel import Session
 from app.models import JobApplication, ApplicationStatus, ApplicationEventLog
 from app.core.database import engine
@@ -44,7 +44,7 @@ def _update_status(app, new_status_val):
         if db_app:
             old_s = db_app.status
             db_app.status = ApplicationStatus(new_status_val)
-            db_app.last_updated = datetime.now()
+            db_app.last_updated = datetime.now(UTC)
             
             # Track milestones
             if db_app.status == ApplicationStatus.INTERVIEW:

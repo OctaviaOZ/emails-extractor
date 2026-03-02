@@ -23,9 +23,9 @@ A modern, AI-powered dashboard to track your job applications using data from Gm
 
 3. **Run:**
    ```bash
-   poetry run streamlit run app/ui.py
+   poetry run streamlit run run_app.py
    ```
 
 ## Configuration
 - **OpenAI:** Enter your API Key in the sidebar settings for better accuracy.
-- **Gmail Label:** Default is 'apply'. Change in `app/ui.py` if needed.
+- **Gmail Label:** Default is 'apply'. Change in the **Settings tab** if needed.

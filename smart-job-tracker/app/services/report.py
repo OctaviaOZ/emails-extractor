@@ -3,7 +3,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
-from datetime import datetime
+from datetime import datetime, UTC
 from app.models import ApplicationStatus
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -32,22 +32,28 @@ def filter_applications_by_date(applications, start_date=None, end_date=None):
         return applications
     
     filtered = []
-    start = pd.to_datetime(start_date) if start_date else datetime.min
-    end = pd.to_datetime(end_date) if end_date else datetime.max
-    
-    # Ensure start/end are timezone-naive or aware matching the app dates
-    # Assuming app.last_updated is naive UTC as per models.py
-    if start.tzinfo:
-        start = start.replace(tzinfo=None)
-    if end.tzinfo:
-        end = end.replace(tzinfo=None)
+    # Helper to get aware timestamp
+    def ensure_aware(dt, default):
+        if dt is None:
+            return default
+        ts = pd.to_datetime(dt)
+        if ts.tzinfo is None:
+            return ts.tz_localize(UTC)
+        return ts.tz_convert(UTC)
+
+    start = ensure_aware(start_date, datetime.min.replace(tzinfo=UTC))
+    end = ensure_aware(end_date, datetime.max.replace(tzinfo=UTC))
     
     # Make end date inclusive (end of day)
     end = end.replace(hour=23, minute=59, second=59)
 
     for app in applications:
-        # Check if last_updated falls in range
-        if start <= app.last_updated <= end:
+        # app.last_updated is now expected to be aware (UTC)
+        app_date = app.last_updated
+        if app_date.tzinfo is None:
+            app_date = app_date.replace(tzinfo=UTC)
+            
+        if start <= app_date <= end:
             filtered.append(app)
     return filtered
 
@@ -124,7 +130,7 @@ def generate_word_report(applications, output_filename, start_date=None, end_dat
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     
     # Date Range Subtitle
-    date_str = datetime.now().strftime('%d.%m.%Y')
+    date_str = datetime.now(UTC).strftime('%d.%m.%Y')
     if start_date and end_date:
         date_str = f"{start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}"
     elif start_date:
@@ -248,7 +254,7 @@ def generate_pdf_report(applications, output_filename, start_date=None, end_date
     styles = getSampleStyleSheet()
     
     # Date Range Title
-    title_text = f"Application Report - {datetime.now().strftime('%Y-%m-%d')}"
+    title_text = f"Application Report - {datetime.now(UTC).strftime('%Y-%m-%d')}"
     if start_date and end_date:
         title_text = f"Application Report ({start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')})"
     elif start_date:

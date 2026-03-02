@@ -1,6 +1,6 @@
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import Callable, Optional, Dict, Tuple, Any
 from sqlmodel import Session
 from dateutil import parser
@@ -148,15 +148,18 @@ class SyncService:
     def _parse_date(self, full_msg: Dict) -> datetime:
         if full_msg.get('internalDate'):
             try:
-                return datetime.fromtimestamp(int(full_msg['internalDate']) / 1000.0)
+                return datetime.fromtimestamp(int(full_msg['internalDate']) / 1000.0, tz=UTC)
             except Exception:
                 pass
         if full_msg.get('date'):
             try:
-                return parser.parse(full_msg['date']).replace(tzinfo=None)
+                dt = parser.parse(full_msg['date'])
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=UTC)
+                return dt
             except Exception:
                 pass
-        return datetime.now()
+        return datetime.now(UTC)
 
     def _mark_processed(self, msg_id: str, company_name: str):
         self.session.add(ProcessedEmail(email_id=msg_id, company_name=company_name))
