@@ -1,4 +1,5 @@
 ai:
+  provider: local
   local_model_name: HuggingFaceTB_SmolLM3-3B-Q4_K_M.gguf
 extraction:
   generic_names:

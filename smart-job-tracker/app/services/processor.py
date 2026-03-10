@@ -2,7 +2,7 @@ from sqlmodel import Session, select
 from datetime import datetime
 import re
 from typing import Optional, Dict, Tuple
-from app.models import JobApplication, ApplicationEventLog, Company, CompanyEmail
+from app.models import JobApplication, ApplicationEventLog, Company, CompanyEmail, Interview, Assessment, Offer
 from app.services.extractor import ApplicationData
 from app.core.constants import (
     COMPANY_SUFFIXES, SHARED_EMAILS, SHARED_PLATFORMS, GENERIC_DOMAINS, ApplicationStatus
@@ -233,6 +233,7 @@ class ApplicationProcessor:
         self.session.refresh(new_app)
         
         self._log_event(new_app.id, None, new_app.status, data.summary, meta.get('subject', 'No Subject'), timestamp)
+        self._sync_detailed_records(new_app, data, timestamp)
         logger.info(f"🆕 New Application: {data.company_name}")
 
     def _update_application(self, app: JobApplication, data: ApplicationData, meta: Dict, timestamp: datetime, override_status: Optional[ApplicationStatus] = None):
@@ -263,7 +264,52 @@ class ApplicationProcessor:
         self.session.commit()
 
         self._log_event(app.id, old_status, new_status, data.summary, meta.get('subject', app.email_subject), timestamp)
+        self._sync_detailed_records(app, data, timestamp)
         logger.info(f"🔄 Updated Application: {app.company_name} ({old_status} -> {new_status})")
+
+    def _sync_detailed_records(self, app: JobApplication, data: ApplicationData, timestamp: datetime):
+        """Automatically creates detailed records (Interview, Assessment, Offer) based on status."""
+        if data.status == ApplicationStatus.INTERVIEW:
+            # Check if an interview on this day already exists
+            existing = self.session.exec(select(Interview).where(
+                Interview.application_id == app.id,
+                Interview.interview_date == timestamp
+            )).first()
+            if not existing:
+                new_i = Interview(
+                    application_id=app.id,
+                    interview_date=timestamp,
+                    notes=data.summary or "Auto-detected from email"
+                )
+                self.session.add(new_i)
+        
+        elif data.status == ApplicationStatus.ASSESSMENT:
+            existing = self.session.exec(select(Assessment).where(
+                Assessment.application_id == app.id,
+                Assessment.due_date == timestamp
+            )).first()
+            if not existing:
+                new_a = Assessment(
+                    application_id=app.id,
+                    due_date=timestamp,
+                    notes=data.summary or "Auto-detected from email"
+                )
+                self.session.add(new_a)
+        
+        elif data.status == ApplicationStatus.OFFER:
+            existing = self.session.exec(select(Offer).where(
+                Offer.application_id == app.id,
+                Offer.offer_date == timestamp
+            )).first()
+            if not existing:
+                new_o = Offer(
+                    application_id=app.id,
+                    offer_date=timestamp,
+                    notes=data.summary or "Auto-detected from email"
+                )
+                self.session.add(new_o)
+        
+        self.session.commit()
 
     def _log_event(self, app_id: int, old_s: Optional[ApplicationStatus], new_s: ApplicationStatus, summary: str, subject: str, timestamp: datetime):
         event = ApplicationEventLog(

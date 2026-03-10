@@ -23,8 +23,8 @@ STATUS_RANK: Dict[ApplicationStatus, int] = {
     ApplicationStatus.COMMUNICATION: 2,
     ApplicationStatus.ASSESSMENT: 3,
     ApplicationStatus.INTERVIEW: 4,
-    ApplicationStatus.REJECTED: 5,
-    ApplicationStatus.OFFER: 6
+    ApplicationStatus.OFFER: 5,
+    ApplicationStatus.REJECTED: 6
 }
 
 # --- Shared Platforms & Email Domains ---

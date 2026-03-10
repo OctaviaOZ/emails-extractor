@@ -255,55 +255,60 @@ class GeminiProvider(LLMProvider):
         return ApplicationData(**json.loads(response.text))
 
 class EmailExtractor:
-    """Orchestrates data extraction using multiple LLM providers with failover."""
+    """Orchestrates data extraction using a single LLM provider from configuration."""
     def __init__(self, config: Optional[Dict[str, Any]] = None):
-        # config is now largely unused but kept for interface compatibility if needed
-        self.providers: List[LLMProvider] = []
-        self.failed_providers: Set[str] = set()
-        
-        self._init_providers()
+        self.provider: Optional[LLMProvider] = None
+        self._init_provider()
 
-    def _init_providers(self):
-        # 1. Local Provider
-        model_name = settings.ai.local_model_name
-        model_path = os.path.join(settings.base_dir, "models", model_name)
-        
-        if os.path.exists(model_path):
-            try:
-                self.providers.append(LocalProvider(model_path))
-            except Exception as e:
-                logger.error(f"Failed to init Local Provider: {e}")
+    def _init_provider(self):
+        provider_type = settings.ai.provider.lower()
+        logger.info(f"Initializing AI provider: {provider_type}")
 
-        # 2. Cloud Providers
-        if settings.anthropic_api_key:
-            self.providers.append(ClaudeProvider(settings.anthropic_api_key))
-        if settings.google_api_key:
-            self.providers.append(GeminiProvider(settings.google_api_key))
-        if settings.openai_api_key:
-            self.providers.append(OpenAIProvider(settings.openai_api_key))
+        try:
+            if provider_type == "local":
+                model_name = settings.ai.local_model_name
+                model_path = os.path.join(settings.base_dir, "models", model_name)
+                if os.path.exists(model_path):
+                    self.provider = LocalProvider(model_path)
+                else:
+                    logger.error(f"Local model not found at {model_path}")
+            
+            elif provider_type == "anthropic":
+                if settings.anthropic_api_key:
+                    self.provider = ClaudeProvider(settings.anthropic_api_key)
+                else:
+                    logger.error("Anthropic API key not found.")
+            
+            elif provider_type == "google":
+                if settings.google_api_key:
+                    self.provider = GeminiProvider(settings.google_api_key)
+                else:
+                    logger.error("Google API key not found.")
+            
+            elif provider_type == "openai":
+                if settings.openai_api_key:
+                    self.provider = OpenAIProvider(settings.openai_api_key)
+                else:
+                    logger.error("OpenAI API key not found.")
+            
+            else:
+                logger.error(f"Unknown provider type: {provider_type}")
+        
+        except Exception as e:
+            logger.error(f"Failed to initialize provider {provider_type}: {e}")
 
     def extract(self, subject: str, sender: str, body_text: str, body_html: str = "") -> ApplicationData:
         effective_body = body_html if body_html else body_text
         
-        for provider in self.providers:
-            provider_name = provider.__class__.__name__
-            if provider_name in self.failed_providers:
-                continue
-
+        if self.provider:
             try:
-                result = provider.extract(sender, subject, effective_body)
+                result = self.provider.extract(sender, subject, effective_body)
                 result = self._refine_company(result, sender, effective_body)
                 return self._refine_status(result, subject, effective_body)
             except Exception as e:
-                err_msg = str(e).lower()
-                if any(x in err_msg for x in ["quota", "429", "403", "limit"]):
-                    logger.warning(f"Quota exceeded for {provider_name}. Skipping.")
-                    self.failed_providers.add(provider_name)
-                else:
-                    logger.warning(f"Provider {provider_name} failed: {e}")
-                continue
+                logger.warning(f"Provider {self.provider.__class__.__name__} failed: {e}")
         
-        logger.error("All AI providers failed. Falling back to heuristics.")
+        logger.warning("AI extraction unavailable or failed. Falling back to heuristics.")
         result = self._extract_heuristic(subject, sender, body_text)
         return self._refine_status(result, subject, body_text)
 
@@ -326,25 +331,30 @@ class EmailExtractor:
     def _refine_status(self, data: ApplicationData, subject: str, text: str) -> ApplicationData:
         search_text = (subject + " " + text).lower()
         
+        # Priority 1: Explicit Rejection Keywords (Always override)
         if any(w.lower() in search_text for w in settings.status_keywords.rejected):
             data.status = ApplicationStatus.REJECTED
             data.is_rejection = True
             return data
 
+        # Priority 2: Assessment Keywords (Always override if not rejected)
         if any(w.lower() in search_text for w in settings.status_keywords.assessment):
             data.status = ApplicationStatus.ASSESSMENT
             return data
 
+        # For remaining refinements, only override "weak" statuses
+        weak_statuses = [ApplicationStatus.APPLIED, ApplicationStatus.PENDING, ApplicationStatus.COMMUNICATION, ApplicationStatus.UNKNOWN]
+        
+        # Applied check
         applied_kws = settings.status_keywords.applied
         if any(w.lower() in search_text for w in applied_kws):
-            weak_statuses = [ApplicationStatus.PENDING, ApplicationStatus.COMMUNICATION, ApplicationStatus.UNKNOWN]
-            if data.status in weak_statuses:
+            if data.status in [ApplicationStatus.PENDING, ApplicationStatus.COMMUNICATION, ApplicationStatus.UNKNOWN]:
                 data.status = ApplicationStatus.APPLIED
+
+        if data.status not in weak_statuses:
             return data
 
-        if data.status not in [ApplicationStatus.APPLIED, ApplicationStatus.PENDING, ApplicationStatus.COMMUNICATION, ApplicationStatus.UNKNOWN]:
-            return data
-
+        # Only reach here if status is "weak"
         if any(w.lower() in search_text for w in settings.status_keywords.offer):
             data.status = ApplicationStatus.OFFER
             return data

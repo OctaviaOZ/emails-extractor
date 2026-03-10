@@ -12,6 +12,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 CONFIG_PATH = BASE_DIR / "config.yaml"
 
 class AIConfig(BaseModel):
+    provider: str = "local"
     local_model_name: str = "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
     temperature: float = 0.1
     max_tokens: int = 512
