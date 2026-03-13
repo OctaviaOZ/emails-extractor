@@ -5,6 +5,7 @@ import socket
 import ssl
 import re
 import base64
+import json
 from typing import List, Dict, Optional, Any
 from bs4 import BeautifulSoup
 from google.auth.transport.requests import Request
@@ -12,6 +13,8 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build, Resource
 from googleapiclient.errors import HttpError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
+from app.core.config import get_gmail_config, settings
 
 logger = logging.getLogger(__name__)
 
@@ -50,26 +53,37 @@ def clean_html_for_llm(html: str) -> str:
     
     return text.strip()
 
-def get_gmail_service(credentials_path: str = 'credentials.json', token_path: str = 'token.pickle', scopes: Optional[List[str]] = None) -> Resource:
-    """Authenticates and returns the Gmail API service."""
+def get_gmail_service(token_path: str = None, scopes: Optional[List[str]] = None) -> Resource:
+    """Authenticates and returns the Gmail API service using Secret Manager."""
     creds = None
     use_scopes = scopes if scopes else SCOPES
     
-    if os.path.exists(token_path):
-        with open(token_path, 'rb') as token:
+    # Use path from settings if not provided
+    target_token_path = token_path if token_path else str(settings.token_path)
+    
+    if os.path.exists(target_token_path):
+        with open(target_token_path, 'rb') as token:
             creds = pickle.load(token)
     
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            if not os.path.exists(credentials_path):
-                raise FileNotFoundError(f"Credentials file not found at {credentials_path}")
-            
-            flow = InstalledAppFlow.from_client_secrets_file(credentials_path, use_scopes)
-            creds = flow.run_local_server(port=0)
+            # Use Secret Manager exclusively
+            client_config_json = get_gmail_config()
+            if not client_config_json:
+                raise RuntimeError("Failed to retrieve Gmail configuration from Secret Manager.")
+                
+            logger.info("Using credentials from Google Cloud Secret Manager")
+            try:
+                client_config = json.loads(client_config_json)
+                flow = InstalledAppFlow.from_client_config(client_config, use_scopes)
+                creds = flow.run_local_server(port=0)
+            except Exception as e:
+                logger.error(f"Failed to initialize OAuth flow from Secret Manager config: {e}")
+                raise
         
-        with open(token_path, 'wb') as token:
+        with open(target_token_path, 'wb') as token:
             pickle.dump(creds, token)
 
     return build('gmail', 'v1', credentials=creds, cache_discovery=False)

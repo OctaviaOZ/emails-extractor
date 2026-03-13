@@ -4,12 +4,28 @@ from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 from pathlib import Path
 from dotenv import load_dotenv
+from google.cloud import secretmanager
 
 # Load environment variables
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 CONFIG_PATH = BASE_DIR / "config.yaml"
+
+def get_gmail_config():
+    """Retrieves Gmail OAuth client ID config from Google Cloud Secret Manager."""
+    client = secretmanager.SecretManagerServiceClient()
+    # Use environment variables for project and secret names if provided
+    project_id = os.getenv("GCP_PROJECT_ID", "my-project-id")
+    secret_name = os.getenv("GCP_GMAIL_SECRET_NAME", "gmail-oauth-client-id")
+    name = f"projects/{project_id}/secrets/{secret_name}/versions/latest"
+    
+    try:
+        response = client.access_secret_version(request={"name": name})
+        return response.payload.data.decode("UTF-8")
+    except Exception as e:
+        print(f"Error accessing Secret Manager: {e}")
+        return None
 
 class AIConfig(BaseModel):
     provider: str = "local"
@@ -44,7 +60,6 @@ class Settings(BaseModel):
     
     # Paths
     base_dir: Path = BASE_DIR
-    credentials_path: Path = BASE_DIR / "credentials.json"
     token_path: Path = BASE_DIR / "token.pickle"
     database_url: str = Field(default_factory=lambda: os.getenv("DATABASE_URL", "postgresql:///job_tracker"))
     
@@ -88,7 +103,7 @@ settings = Settings.load()
 
 def save_settings(new_settings: Settings):
     """Persists current settings to config.yaml (only serializable fields)."""
-    data = new_settings.model_dump(exclude={'base_dir', 'credentials_path', 'token_path', 'database_url', 'openai_api_key', 'anthropic_api_key', 'google_api_key'})
+    data = new_settings.model_dump(exclude={'base_dir', 'token_path', 'database_url', 'openai_api_key', 'anthropic_api_key', 'google_api_key'})
     
     # Convert paths to strings for YAML
     # (Pydantic's model_dump might do this, but being safe for YAML)

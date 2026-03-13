@@ -4,6 +4,8 @@
 .idea/
 .vscode/
 .gemini/
+.claude/
+CLAUDE.md
 
 # Logs
 *.log
@@ -11,13 +13,10 @@ logs/
 log/
 
 # creds
-credentials.json
 token.pickle
 *.csv
 
 reports/
-
-SENIOR_ENGINEER_GUIDE.md
 
 start_app.sh
 

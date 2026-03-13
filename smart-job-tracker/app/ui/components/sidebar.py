@@ -66,11 +66,11 @@ def _sync_emails():
     
     try:
         service = get_gmail_service(
-            credentials_path=str(settings.credentials_path), 
-            token_path=str(settings.token_path), 
+            token_path=str(settings.token_path),
             scopes=settings.scopes
         )
     except Exception as e:
+
         st.error(f"Authentication failed: {e}")
         logger.error(f"Authentication failed: {e}")
         return
