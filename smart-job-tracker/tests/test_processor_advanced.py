@@ -1,10 +1,10 @@
 import pytest
 from datetime import datetime, UTC
 from unittest.mock import MagicMock
-from sqlmodel import Session, select
+from sqlmodel import Session
 from app.services.processor import ApplicationProcessor
 from app.services.extractor import ApplicationData
-from app.models import JobApplication, ApplicationStatus, Company, CompanyEmail
+from app.models import JobApplication, ApplicationStatus, Company
 
 @pytest.fixture
 def session():

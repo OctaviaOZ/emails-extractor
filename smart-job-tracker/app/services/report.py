@@ -4,25 +4,21 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
 from datetime import datetime, UTC
-from app.models import ApplicationStatus
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 def get_status_label(status, mapping=None):
     """
     Returns the localized label for a status using the provided mapping.
-    Defaults to the English enum value if no mapping is found.
+    Handles both enum objects and plain strings.
     """
+    status_str = getattr(status, 'value', str(status))
     if mapping:
-        # Check for direct match (e.g., 'Applied')
-        if status.value in mapping:
-            return mapping[status.value]
-        # Check for match by key (e.g., if mapping uses 'Applied' as key)
+        if status_str in mapping:
+            return mapping[status_str]
         if status in mapping:
             return mapping[status]
-            
-    # Default Fallback (English / Raw Value)
-    return status.value
+    return status_str
 
 def filter_applications_by_date(applications, start_date=None, end_date=None):
     """
@@ -101,7 +97,7 @@ def generate_word_report(applications, output_filename, start_date=None, end_dat
 
     for company, group in df.groupby('company_name'):
         latest = group.iloc[0]
-        interview_count = group[group['status'] == ApplicationStatus.INTERVIEW].shape[0]
+        interview_count = int(group['reached_interview'].any())
         
         # Get localized label
         status_label = get_status_label(latest['status'], active_mapping)
@@ -229,7 +225,7 @@ def generate_pdf_report(applications, output_filename, start_date=None, end_date
         latest = group.iloc[0]
         
         # Calculate Interview Count
-        interview_count = group[group['status'] == ApplicationStatus.INTERVIEW].shape[0]
+        interview_count = int(group['reached_interview'].any())
         
         status_label = get_status_label(latest['status'], mapping)
         

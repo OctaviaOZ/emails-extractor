@@ -19,20 +19,13 @@ def set_memory_limit(max_mem_mb):
         return
     
     try:
-        # Get current limits
         soft, hard = resource.getrlimit(resource.RLIMIT_AS)
-        
-        # Convert MB to Bytes
+
         max_mem_bytes = int(max_mem_mb * 1024 * 1024)
-        
-        # If the current soft limit is already lower (or not unlimited), respect it? 
-        # Actually, we want to enforce OUR limit if it's safer.
-        # But we cannot exceed the hard limit.
-        
+
         if hard != resource.RLIM_INFINITY and max_mem_bytes > hard:
             max_mem_bytes = hard
 
-        # Set the limit
         resource.setrlimit(resource.RLIMIT_AS, (max_mem_bytes, hard))
         print(f"\n[System Safety] Memory limit set to {max_mem_mb} MB to prevent freezing.")
         
@@ -45,10 +38,9 @@ def set_memory_limit(max_mem_mb):
 def global_memory_safety():
     """
     Global fixture to enforce memory limits and prevent system freeze.
-    Default limit is 2.5GB (2560MB). Can be overridden by TEST_MEMORY_LIMIT_MB env var.
+    Default limit is 16GB (16384MB). Can be overridden by TEST_MEMORY_LIMIT_MB env var.
     """
-    # Default to 2.5GB which is safer for an 8GB machine with other apps running
-    limit_mb = int(os.getenv("TEST_MEMORY_LIMIT_MB", 2560))
+    limit_mb = int(os.getenv("TEST_MEMORY_LIMIT_MB", 16384))
     set_memory_limit(limit_mb)
 
 @pytest.fixture(autouse=True)
@@ -91,7 +83,6 @@ def memory_profile(request):
     current, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     
-    current_mb = current / 1024 / 1024
     peak_mb = peak / 1024 / 1024
     
     print(f"\n[Memory Profile] {request.node.name}: Peak Memory Usage: {peak_mb:.2f} MB")

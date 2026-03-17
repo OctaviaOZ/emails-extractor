@@ -18,15 +18,17 @@ from app.ui.tabs.history import render_history_view
 # --- Memory Safety ---
 def set_memory_limit(max_mem_mb):
     """
-    Limits the virtual memory address space of the process to prevent system freezes.
+    Limits virtual address space (RLIMIT_AS) to prevent system freezes from runaway processes.
+    Must be set high enough to accommodate: Python + Streamlit shared libraries (~4GB virtual)
+    + llama-cpp mmap of model files (~2GB) + headroom. 16GB is a safe ceiling.
     """
     if sys.platform != 'linux':
         return
-    
+
     try:
         soft, hard = resource.getrlimit(resource.RLIMIT_AS)
         max_mem_bytes = int(max_mem_mb * 1024 * 1024)
-        
+
         if hard != resource.RLIM_INFINITY and max_mem_bytes > hard:
             max_mem_bytes = hard
 
@@ -34,8 +36,8 @@ def set_memory_limit(max_mem_mb):
     except Exception as e:
         print(f"[System Safety] Warning: Could not set memory limit: {e}")
 
-# Apply 6GB limit on startup
-set_memory_limit(6144)
+# 16GB virtual address space cap — high enough for Streamlit + model mmap, low enough to catch runaway processes
+set_memory_limit(16384)
 
 # Setup Logging
 logger = setup_logging(settings.base_dir / "persistent_sync.log")

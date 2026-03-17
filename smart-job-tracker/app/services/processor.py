@@ -1,5 +1,5 @@
 from sqlmodel import Session, select
-from datetime import datetime
+from datetime import datetime, UTC
 import re
 from typing import Optional, Dict, Tuple
 from app.models import JobApplication, ApplicationEventLog, Company, CompanyEmail, Interview, Assessment, Offer
@@ -96,7 +96,7 @@ class ApplicationProcessor:
                 return app, True
         
         # Check inactive applications
-        all_apps.sort(key=lambda x: x.last_updated, reverse=True)
+        all_apps.sort(key=lambda x: x.last_updated if x.last_updated.tzinfo else x.last_updated.replace(tzinfo=UTC), reverse=True)
         for app in all_apps:
             if not app.is_active and is_match(app):
                 return app, False
@@ -125,13 +125,15 @@ class ApplicationProcessor:
 
     def _is_fuzzy_name_match(self, name1: str, name2: str) -> bool:
         if len(name1) > 4 and len(name2) > 4:
-            if name1 in name2 or name2 in name1:
-                generic_words = {'group', 'systems', 'solutions', 'technologies', 'holding', 'limited'}
-                clean1 = " ".join(w for w in name1.split() if w not in generic_words)
-                clean2 = " ".join(w for w in name2.split() if w not in generic_words)
-                if len(clean1) > 3 and len(clean2) > 3:
-                    if clean1 in clean2 or clean2 in clean1:
-                        return True
+            generic_words = {'group', 'systems', 'solutions', 'technologies', 'holding', 'limited'}
+            clean1 = " ".join(w for w in name1.split() if w not in generic_words)
+            clean2 = " ".join(w for w in name2.split() if w not in generic_words)
+            if len(clean1) > 3 and len(clean2) > 3:
+                # Word-boundary match to avoid "apple" matching "pineapple"
+                pat1 = r'\b' + re.escape(clean1) + r'\b'
+                pat2 = r'\b' + re.escape(clean2) + r'\b'
+                if re.search(pat1, clean2) or re.search(pat2, clean1):
+                    return True
         return False
 
     def process_extraction(self, data: ApplicationData, email_meta: Dict, email_timestamp: datetime):
@@ -242,7 +244,8 @@ class ApplicationProcessor:
         
         app.status = new_status
         
-        if timestamp >= app.last_updated:
+        app_last_updated = app.last_updated if app.last_updated.tzinfo else app.last_updated.replace(tzinfo=UTC)
+        if timestamp >= app_last_updated:
             app.last_updated = timestamp
             app.email_id = meta.get('id', app.email_id)
             app.email_subject = meta.get('subject', app.email_subject)
@@ -263,7 +266,8 @@ class ApplicationProcessor:
         self.session.add(app)
         self.session.commit()
 
-        self._log_event(app.id, old_status, new_status, data.summary, meta.get('subject', app.email_subject), timestamp)
+        if old_status != new_status:
+            self._log_event(app.id, old_status, new_status, data.summary, meta.get('subject', app.email_subject), timestamp)
         self._sync_detailed_records(app, data, timestamp)
         logger.info(f"🔄 Updated Application: {app.company_name} ({old_status} -> {new_status})")
 

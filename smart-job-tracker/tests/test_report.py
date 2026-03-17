@@ -1,7 +1,6 @@
-import pytest
 from datetime import datetime, timedelta, UTC
 from app.services.report import filter_applications_by_date, generate_word_report
-from app.models import JobApplication, ApplicationStatus
+from app.models import ApplicationStatus
 import os
 
 # Mock JobApplication for testing

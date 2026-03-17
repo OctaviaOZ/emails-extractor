@@ -54,7 +54,7 @@ def download_model(repo_id: str, filename: str = None, local_dir: str = "./model
         except Exception as e:
             print(f"❌ Download failed: {e}")
     else:
-        print(f"⬇️  Downloading FULL repo...")
+        print("⬇️  Downloading FULL repo...")
         snapshot_download(
             repo_id=repo_id,
             local_dir=local_dir

@@ -14,7 +14,6 @@ from sqlmodel import SQLModel
 # Add the app directory to sys.path so we can import models
 sys.path.insert(0, os.path.realpath(os.path.join(os.path.dirname(__file__), "..")))
 
-from app.models import JobApplication, ProcessingLog # Import models to register them with SQLModel.metadata
 # ----------------------
 
 # this is the Alembic Config object, which provides

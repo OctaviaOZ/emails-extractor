@@ -68,6 +68,13 @@ extraction:
   - oraclecloud
   - avature
   - brassring
+  - empfehlungsbund
+  - stepstone
+  - xing
+  - monster
+  - experteer
+  - karriere.at
+  - hokify
   subject_patterns:
   - group: 1
     pattern: (?i) at (.*)
@@ -114,6 +121,11 @@ status_keywords:
   - confirming
   - application received
   - successfully submitted
+  - thank you for your application
+  - you just started an application
+  - started an application
+  - your application has been
+  - we received your application
   - "Eingangsbest\xE4tigung"
   - "Vielen Dank f\xFCr Ihre Bewerbung"
   - "Vielen Dank f\xFCr Deine Bewerbung"
@@ -165,3 +177,10 @@ status_keywords:
   - anderweitig entschieden
   - abgeschlossen
   - nicht weiterverfolgen
+  - auf andere Stellen zu bewerben
+  - "w\xFCnschen Dir viel Erfolg"
+  - "w\xFCnschen Ihnen viel Erfolg"
+  - reges Interesse gestoßen
+  - "gro\xDFe Anzahl an"
+  - anderen Kandidaten den Vorzug
+  - nicht in die n\xE4chste Runde

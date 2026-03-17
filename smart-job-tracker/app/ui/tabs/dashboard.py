@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 from datetime import datetime, UTC
 from sqlmodel import Session, select
 from app.models import JobApplication, ApplicationStatus, Interview, Assessment, Offer, ApplicationEventLog
@@ -71,7 +72,7 @@ def render_dashboard(apps, df_all, df):
 
         # Dashboard Charts
         col_a, col_b = st.columns(2)
-        
+
         with col_a:
             st.subheader("Process Status")
             if not df.empty:
@@ -86,11 +87,28 @@ def render_dashboard(apps, df_all, df):
                 fig2 = px.bar(timeline, x='date', y='count')
                 st.plotly_chart(fig2, width='stretch')
 
+        # --- Funnel Analytics ---
+        _render_funnel_analytics(df_all, session)
+
         st.subheader("Application Pipeline")
-        status_options = ["All"] + sorted(df['status'].unique().tolist())
-        filter_status = st.selectbox("Filter Table by Status", options=status_options)
-        
+
+        # Search + Filter row
+        search_col, filter_col = st.columns([0.6, 0.4])
+        with search_col:
+            search_query = st.text_input("🔍 Search", placeholder="Company, position, notes...")
+        with filter_col:
+            status_options = ["All"] + sorted(df['status'].unique().tolist())
+            filter_status = st.selectbox("Filter by Status", options=status_options)
+
         df_display = df.copy()
+        if search_query:
+            mask = (
+                df_display['company_name'].str.contains(search_query, case=False, na=False) |
+                df_display['position'].str.contains(search_query, case=False, na=False) |
+                df_display['notes'].str.contains(search_query, case=False, na=False) |
+                df_display['summary'].str.contains(search_query, case=False, na=False)
+            )
+            df_display = df_display[mask]
         if filter_status != "All":
             df_display = df_display[df_display['status'] == filter_status]
             
@@ -149,7 +167,7 @@ def _render_quick_edit(df_display):
                     current_status_idx = status_vals.index(app_to_edit.status.value)
                     new_status_val = st.selectbox("Current Status", options=status_vals, index=current_status_idx)
                     
-                    if st.form_submit_button("Save Changes", use_container_width=True):
+                    if st.form_submit_button("Save Changes", width='stretch'):
                         app_to_edit.notes = new_notes
                         new_status_enum = ApplicationStatus(new_status_val)
                         
@@ -181,3 +199,54 @@ def _render_quick_edit(df_display):
                         st.rerun()
     else:
         st.info("💡 Click a row in the table to edit notes or status.")
+
+
+def _render_funnel_analytics(df_all: pd.DataFrame, session):
+    """Renders funnel conversion rates and average time-in-stage analytics."""
+    with st.expander("📊 Pipeline Analytics"):
+        if df_all.empty:
+            st.info("No data yet.")
+            return
+
+        total = len(df_all)
+        assessed = len(df_all[df_all['reached_assessment']])
+        interviewed = len(df_all[df_all['reached_interview']])
+        offered = len(df_all[df_all['status'] == ApplicationStatus.OFFER.value])
+        rejected = len(df_all[df_all['status'] == ApplicationStatus.REJECTED.value])
+
+        # Funnel chart
+        funnel_fig = go.Figure(go.Funnel(
+            y=["Applied", "Assessment", "Interview", "Offer"],
+            x=[total, assessed, interviewed, offered],
+            textinfo="value+percent initial",
+            marker={"color": ["#4C78A8", "#F58518", "#54A24B", "#79706E"]},
+        ))
+        funnel_fig.update_layout(margin=dict(t=20, b=20, l=20, r=20), height=280)
+        st.plotly_chart(funnel_fig, width='stretch')
+
+        # Conversion rates
+        def rate(num, denom):
+            return f"{num / denom * 100:.0f}%" if denom else "—"
+
+        conv_col1, conv_col2, conv_col3, conv_col4 = st.columns(4)
+        conv_col1.metric("Applied → Assessment", rate(assessed, total))
+        conv_col2.metric("Assessment → Interview", rate(interviewed, assessed))
+        conv_col3.metric("Interview → Offer", rate(offered, interviewed))
+        conv_col4.metric("Rejection Rate", rate(rejected, total))
+
+        # Average time-in-stage (days from created_at to last_updated)
+        st.markdown("**Average days per stage (created → last update)**")
+        df_all = df_all.copy()
+        df_all['created_at'] = pd.to_datetime(df_all['created_at'], utc=True)
+        df_all['last_updated'] = pd.to_datetime(df_all['last_updated'], utc=True)
+        df_all['days_open'] = (df_all['last_updated'] - df_all['created_at']).dt.days
+
+        stage_avg = (
+            df_all.groupby('status')['days_open']
+            .mean()
+            .round(1)
+            .reset_index()
+            .rename(columns={'status': 'Status', 'days_open': 'Avg Days'})
+            .sort_values('Avg Days', ascending=False)
+        )
+        st.dataframe(stage_avg, hide_index=True, width='stretch')

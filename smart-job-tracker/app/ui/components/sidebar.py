@@ -1,7 +1,7 @@
 import streamlit as st
 from datetime import datetime, UTC
 from sqlmodel import Session, select, delete
-from app.models import JobApplication, ApplicationEventLog, ProcessedEmail, Company, CompanyEmail, ProcessingLog
+from app.models import JobApplication, ApplicationEventLog, ProcessedEmail, Company, CompanyEmail, ProcessingLog, Assessment, Interview, Offer
 from app.services.report import generate_pdf_report, generate_word_report
 from app.services.sync import SyncService
 from app.services.extractor import EmailExtractor
@@ -196,7 +196,10 @@ def _reset_db():
     try:
         with Session(engine) as session:
             # Delete in order to respect Foreign Key constraints
-            session.exec(delete(ApplicationEventLog)) 
+            session.exec(delete(ApplicationEventLog))
+            session.exec(delete(Assessment))
+            session.exec(delete(Interview))
+            session.exec(delete(Offer))
             session.exec(delete(JobApplication))
             session.exec(delete(CompanyEmail)) # Delete emails before company
             session.exec(delete(Company))

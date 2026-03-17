@@ -2,33 +2,35 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, UTC
 from sqlmodel import Session, select
-from app.models import JobApplication, ApplicationEventLog, ApplicationStatus, Interview, Assessment, Offer
+from app.models import JobApplication, ApplicationEventLog, ApplicationStatus, Interview, Assessment, Offer, ApplicationDocument
 from app.core.database import engine
 
 def render_history_view(df, df_display):
     st.divider()
     st.subheader("🔎 Application Details & History")
     
-    # Determine initial selection from table click
-    company_to_show = None
-    if not df.empty and 'company_name' in df.columns:
-        editor_state = st.session_state.get("pipeline_editor")
-        if editor_state and editor_state.get("selection") and editor_state["selection"].get("rows"):
-            selected_row_idx = editor_state["selection"]["rows"][0]
-            sorted_df = df_display.sort_values(by='Last Update', ascending=False)
-            if selected_row_idx < len(sorted_df):
-                company_to_show = sorted_df.iloc[selected_row_idx]['company_name']
-
     options = [""]
     if not df.empty and 'company_name' in df.columns:
         options += sorted(df['company_name'].unique().tolist())
-    
-    index_to_select = 0
-    if company_to_show and company_to_show in options:
-        index_to_select = options.index(company_to_show)
 
-    selected_company = st.selectbox("Select Company to View History", options=options, index=index_to_select)
-    
+    # Determine if we should drive the selectbox to a specific company.
+    # Kanban "View Details" button takes priority, then dashboard table row click.
+    company_to_show = None
+    if st.session_state.get("selected_kanban_company"):
+        company_to_show = st.session_state.pop("selected_kanban_company")
+    elif not df.empty and 'company_name' in df.columns:
+        editor_state = st.session_state.get("pipeline_editor")
+        if editor_state and editor_state.get("selection") and editor_state["selection"].get("rows"):
+            selected_row_idx = editor_state["selection"]["rows"][0]
+            sorted_df = df_display.sort_values(by='last_updated', ascending=False)
+            if selected_row_idx < len(sorted_df):
+                company_to_show = sorted_df.iloc[selected_row_idx]['company_name']
+
+    if company_to_show and company_to_show in options:
+        st.session_state["history_company_select"] = company_to_show
+
+    selected_company = st.selectbox("Select Company to View History", options=options, key="history_company_select")
+
     if selected_company:
         _render_company_details(selected_company)
 
@@ -63,11 +65,13 @@ def _render_company_details(selected_company):
                     st.rerun()
         
         with hd2:
-            dt_hist, dt_interviews, dt_assessments, dt_offers = st.tabs(["📜 History", "🤝 Interviews", "📝 Assessments", "🎊 Offers"])
-            
+            dt_hist, dt_interviews, dt_assessments, dt_offers, dt_docs = st.tabs(
+                ["📜 History", "🤝 Interviews", "📝 Assessments", "🎊 Offers", "📄 Documents"]
+            )
+
             with dt_hist:
                 _render_event_log(history, app_details)
-            
+
             with dt_interviews:
                 _render_interviews(session, app_details)
 
@@ -77,11 +81,15 @@ def _render_company_details(selected_company):
             with dt_offers:
                 _render_offers(session, app_details)
 
+            with dt_docs:
+                _render_documents(session, app_details)
+
 def _render_edit_form(session, app_details):
     with st.form("edit_app_form"):
         new_company = st.text_input("Company Name", value=app_details.company_name)
         new_position = st.text_input("Position", value=app_details.position)
         new_notes = st.text_area("User Notes", value=app_details.notes or "")
+        new_job_description = st.text_area("Job Description", value=app_details.job_description or "", height=200)
         
         # Status Selection
         status_options = [s.value for s in ApplicationStatus]
@@ -97,6 +105,7 @@ def _render_edit_form(session, app_details):
                 db_app.company_name = new_company
                 db_app.position = new_position
                 db_app.notes = new_notes
+                db_app.job_description = new_job_description or None
                 
                 new_status_enum = ApplicationStatus(new_status_val)
                 if db_app.status != new_status_enum:
@@ -300,3 +309,62 @@ def _render_offers(session, app_details):
                         st.rerun()
     else:
         st.info("No offers recorded.")
+
+def _render_documents(session, app_details):
+    st.markdown("### Documents")
+
+    docs = session.exec(
+        select(ApplicationDocument)
+        .where(ApplicationDocument.application_id == app_details.id)
+        .order_by(ApplicationDocument.uploaded_at.desc())
+    ).all()
+
+    with st.popover("➕ Upload Document"):
+        uploaded_file = st.file_uploader(
+            "Choose a file", type=["pdf", "docx", "doc", "txt", "odt"],
+            key=f"doc_upload_{app_details.id}"
+        )
+        doc_type = st.radio(
+            "Document type",
+            options=["cv", "cover_letter", "other"],
+            format_func=lambda x: {"cv": "CV / Resume", "cover_letter": "Cover Letter", "other": "Other"}[x],
+            horizontal=True,
+            key=f"doc_type_{app_details.id}"
+        )
+        if st.button("Upload", key=f"doc_upload_btn_{app_details.id}") and uploaded_file:
+            new_doc = ApplicationDocument(
+                application_id=app_details.id,
+                filename=uploaded_file.name,
+                doc_type=doc_type,
+                file_data=uploaded_file.read(),
+            )
+            session.add(new_doc)
+            session.commit()
+            st.success(f"Uploaded {uploaded_file.name}!")
+            st.rerun()
+
+    if docs:
+        type_label = {"cv": "CV", "cover_letter": "Cover Letter", "other": "Other"}
+        for doc in docs:
+            col_name, col_dl, col_del = st.columns([0.55, 0.25, 0.20])
+            with col_name:
+                st.markdown(
+                    f"**{doc.filename}** &nbsp; `{type_label.get(doc.doc_type, doc.doc_type)}`  \n"
+                    f"<small>{doc.uploaded_at.strftime('%Y-%m-%d %H:%M')}</small>",
+                    unsafe_allow_html=True,
+                )
+            with col_dl:
+                st.download_button(
+                    label="⬇️ Download",
+                    data=doc.file_data,
+                    file_name=doc.filename,
+                    key=f"dl_{doc.id}",
+                    use_container_width=True,
+                )
+            with col_del:
+                if st.button("🗑️ Delete", key=f"del_doc_{doc.id}", use_container_width=True):
+                    session.delete(doc)
+                    session.commit()
+                    st.rerun()
+    else:
+        st.info("No documents uploaded yet.")

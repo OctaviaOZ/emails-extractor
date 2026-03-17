@@ -1,7 +1,6 @@
 from typing import Optional, List
 from datetime import datetime, UTC
 from sqlmodel import Field, SQLModel, Relationship
-from enum import Enum
 from app.core.constants import STATUS_RANK, ApplicationStatus
 
 class ApplicationEventLog(SQLModel, table=True):
@@ -73,7 +72,8 @@ class JobApplication(SQLModel, table=True):
     email_snippet: Optional[str] = None
     summary: Optional[str] = None
     notes: Optional[str] = Field(default=None)
-    
+    job_description: Optional[str] = Field(default=None)
+
     # Milestone Flags
     reached_assessment: bool = Field(default=False)
     reached_interview: bool = Field(default=False)
@@ -92,6 +92,7 @@ class JobApplication(SQLModel, table=True):
     interviews: List["Interview"] = Relationship(back_populates="application", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
     assessments: List["Assessment"] = Relationship(back_populates="application", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
     offers: List["Offer"] = Relationship(back_populates="application", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
+    documents: List["ApplicationDocument"] = Relationship(back_populates="application", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
 
     @property
     def status_rank(self) -> int:
@@ -134,6 +135,21 @@ class Offer(SQLModel, table=True):
     notes: Optional[str] = None
     
     application: Optional[JobApplication] = Relationship(back_populates="offers")
+
+class ApplicationDocument(SQLModel, table=True):
+    """Stores CV and other documents attached to a job application."""
+    __tablename__ = "applicationdocument"
+    __table_args__ = {"extend_existing": True}
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    application_id: int = Field(foreign_key="jobapplication.id")
+    filename: str
+    doc_type: str = Field(default="cv")  # "cv", "cover_letter", "other"
+    file_data: bytes
+    uploaded_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    application: Optional["JobApplication"] = Relationship(back_populates="documents")
+
 
 class ProcessedEmail(SQLModel, table=True):
     """Prevents double processing of emails."""

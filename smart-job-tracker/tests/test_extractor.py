@@ -1,6 +1,5 @@
 import pytest
-import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from app.services.extractor import EmailExtractor, ApplicationData, ApplicationStatus, OpenAIProvider, ClaudeProvider, LocalProvider, GeminiProvider
 from app.core.config import settings
 

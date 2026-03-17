@@ -10,7 +10,6 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 import sqlmodel
-from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine.reflection import Inspector
 
 # revision identifiers, used by Alembic.
@@ -78,7 +77,8 @@ def downgrade() -> None:
     try:
         op.drop_index(op.f('ix_jobapplication_company_name'), table_name='jobapplication')
         op.create_index('ix_jobapplication_company_name', 'jobapplication', ['company_name'], unique=True)
-    except: pass
+    except Exception:
+        pass
     
     # Remove is_active
     if 'is_active' in columns:

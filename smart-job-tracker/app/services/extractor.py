@@ -3,7 +3,7 @@ import logging
 import re
 import json
 from abc import ABC, abstractmethod
-from typing import Optional, Any, Dict, Set, List
+from typing import Optional, Any, Dict
 from pydantic import BaseModel, Field, model_validator
 from app.core.config import settings
 from app.core.constants import PLATFORM_NAMES, GENERIC_NAMES, GENERIC_DOMAINS, ApplicationStatus
@@ -124,31 +124,11 @@ class LocalProvider(LLMProvider):
             "n_batch": 128,
             "verbose": False
         }
-        
+
         if "smollm" in os.path.basename(model_path).lower():
             kwargs["chat_format"] = "chatml"
 
-        try:
-            return Llama(**kwargs)
-        except Exception as e:
-            logger.warning(f"Failed to load model: {e}. Attempting fallback...")
-            return self._load_fallback()
-
-    def _load_fallback(self) -> Any:
-        # Use settings base dir
-        fallback_path = os.path.join(settings.base_dir, "models", "Llama-3.2-3B-Instruct-Q4_K_M.gguf")
-        
-        if not os.path.exists(fallback_path):
-            raise FileNotFoundError(f"Fallback model not found at {fallback_path}")
-
-        return Llama(
-            model_path=fallback_path,
-            n_ctx=2048,
-            n_threads=2,
-            n_gpu_layers=0,
-            n_batch=64,
-            verbose=False
-        )
+        return Llama(**kwargs)
 
     def _parse_json(self, text: str) -> Dict[str, Any]:
         """Robustly extracts JSON from LLM output."""
@@ -178,6 +158,7 @@ class LocalProvider(LLMProvider):
             "You are a professional recruitment assistant. Extract structured job application data in JSON format.\n"
             "IGNORE platform names (Workday, Greenhouse, etc.). Use the actual employer name.\n"
             "Statuses: [Applied, Interview, Assessment, Offer, Rejected, Pending].\n"
+            "Keep 'summary' under 15 words.\n"
             "Respond ONLY with valid JSON."
         )
         user_content = f"Sender: {sender}\nSubject: {subject}\nBody: {body[:3000]}"
@@ -314,18 +295,38 @@ class EmailExtractor:
 
     def _refine_company(self, data: ApplicationData, sender: str, text: str) -> ApplicationData:
         platforms = settings.extraction.platforms
-        
+
         if any(p.lower() in data.company_name.lower() for p in platforms):
             data.company_name = "Unknown"
+
+        # Extract sender domain for cross-validation
+        sender_domain = ""
+        sender_email_part = sender
+        if '<' in sender:
+            sender_email_part = sender.split('<')[1].replace('>', '').strip()
+        if '@' in sender_email_part:
+            sender_domain = sender_email_part.split('@')[1].lower()
+
+        # If LLM extracted a company that doesn't match the sender domain at all,
+        # and the sender is not generic, trust the domain-based heuristic instead.
+        if data.company_name not in ("Unknown", "") and sender_domain:
+            domain_root = sender_domain.split('.')[0]
+            llm_lower = data.company_name.lower().replace(' ', '').replace('-', '')
+            is_generic_sender = sender_domain in GENERIC_DOMAINS or any(p.lower() in sender_domain for p in platforms)
+            if (not is_generic_sender and len(domain_root) > 2
+                    and domain_root not in llm_lower and llm_lower not in domain_root):
+                heuristic = self._extract_heuristic("", sender, text)
+                if heuristic.company_name not in ("Unknown", data.company_name):
+                    data.company_name = heuristic.company_name
 
         if data.company_name == "Unknown":
             heuristic = self._extract_heuristic("", sender, text)
             if heuristic.company_name != "Unknown":
                 data.company_name = heuristic.company_name
-        
+
         if any(p.lower() in data.company_name.lower() for p in platforms):
             data.company_name = "Unknown"
-            
+
         return data
 
     def _refine_status(self, data: ApplicationData, subject: str, text: str) -> ApplicationData:
@@ -342,9 +343,40 @@ class EmailExtractor:
             data.status = ApplicationStatus.ASSESSMENT
             return data
 
+        # Priority 2.5: Interview keywords — correct LLM over-promotion to OFFER (e.g. calendar invites)
+        if any(w.lower() in search_text for w in settings.status_keywords.interview):
+            has_real_offer_kw = any(w.lower() in search_text for w in settings.status_keywords.offer)
+            if data.status == ApplicationStatus.OFFER and not has_real_offer_kw:
+                data.status = ApplicationStatus.INTERVIEW
+                return data
+
+        # Priority 3: Strong application-confirmation signals (override any LLM misclassification)
+        strong_applied = [
+            "you just started an application",
+            "started an application",
+            "application received",
+            "your application has been submitted",
+            "we received your application",
+            "successfully submitted",
+            "bewerbung eingegangen",
+            "eingang ihrer bewerbung",
+            "eingangsbestätigung",
+            "vielen dank für ihre bewerbung",
+            "vielen dank für deine bewerbung",
+            "danke für ihre bewerbung",
+            "danke für deine bewerbung",
+            "ihre bewerbung ist eingegangen",
+            "wir haben ihre bewerbung erhalten",
+            "wir haben deine bewerbung erhalten",
+        ]
+        if any(kw in search_text for kw in strong_applied):
+            data.status = ApplicationStatus.APPLIED
+            data.is_rejection = False
+            return data
+
         # For remaining refinements, only override "weak" statuses
         weak_statuses = [ApplicationStatus.APPLIED, ApplicationStatus.PENDING, ApplicationStatus.COMMUNICATION, ApplicationStatus.UNKNOWN]
-        
+
         # Applied check
         applied_kws = settings.status_keywords.applied
         if any(w.lower() in search_text for w in applied_kws):
@@ -386,10 +418,19 @@ class EmailExtractor:
 
         is_platform = any(p.lower() in domain for p in platforms) or domain in GENERIC_DOMAINS or any(p in domain for p in PLATFORM_NAMES)
 
-        if (is_platform or company == "Unknown") and sender_name:
+        # Detect personal names (e.g. "Yelyzaveta Ivakhnenko") — not useful as company names
+        is_person_name = bool(re.match(r'^[A-Z][a-z]+(?:\s[A-Z][a-zA-Z\-]+)+$', sender_name)) if sender_name else False
+
+        if (is_platform or company == "Unknown") and sender_name and not is_person_name:
             clean_name = re.sub(r'(?i)\s+(hiring|team|recruiting|careers|jobs|notifications|via|bewerbermanagement|career|system|hr).*', '', sender_name).strip()
             if clean_name and clean_name.lower() not in [n.lower() for n in ignore_names]:
                 company = clean_name
+
+        # If sender name was a person or company still unknown, try extracting from domain
+        if (company == "Unknown" or is_person_name) and domain and not is_platform:
+            domain_root = domain.split('.')[0]
+            if len(domain_root) > 2 and domain_root.lower() not in [n.lower() for n in ignore_names]:
+                company = domain_root.capitalize()
 
         if company == "Unknown" and text:
             body_match = re.search(r'(?i)\s+at\s+([A-Z][A-Za-z0-9\s&]{2,50})(?:\s+Corporate|SE|GmbH|AG|Inc|\.|\s|$)', text[:500])

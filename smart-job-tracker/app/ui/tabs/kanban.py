@@ -26,7 +26,11 @@ def render_kanban(apps):
                     st.caption(f"{app.position}")
                     if app.summary:
                         st.markdown(f"<small>{app.summary[:60]}...</small>", unsafe_allow_html=True)
-                    
+
+                    if st.button("View Details", key=f"view_{app.id}", use_container_width=True):
+                        st.session_state.selected_kanban_company = app.company_name
+                        st.rerun()
+
                     # Status change trigger
                     new_status_val = st.selectbox(
                         "Move to:",
@@ -34,7 +38,7 @@ def render_kanban(apps):
                         index=[s.value for s in KANBAN_STATUSES].index(status.value),
                         key=f"move_{app.id}_{app.status}"
                     )
-                    
+
                     if new_status_val != status.value:
                         _update_status(app, new_status_val)
 

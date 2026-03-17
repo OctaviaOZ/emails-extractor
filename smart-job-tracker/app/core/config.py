@@ -31,7 +31,7 @@ class AIConfig(BaseModel):
     provider: str = "local"
     local_model_name: str = "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
     temperature: float = 0.1
-    max_tokens: int = 512
+    max_tokens: int = 768
 
 class ExtractionConfig(BaseModel):
     platforms: List[str] = [
