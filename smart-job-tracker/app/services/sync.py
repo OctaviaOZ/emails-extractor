@@ -104,7 +104,10 @@ class SyncService:
             email_dt = self._parse_date(full_msg)
             cleaned_html = clean_html_for_llm(full_msg.get('html', ''))
             
-            data = self.extractor.extract(full_msg['subject'], full_msg['sender'], full_msg['text'], cleaned_html)
+            data = self.extractor.extract(
+                full_msg['subject'], full_msg['sender'], full_msg['text'], cleaned_html,
+                email_date=email_dt.strftime('%Y-%m-%d'),
+            )
             
             if not data or data.company_name == "Unknown":
                 self._mark_processed(msg_id, "Unknown")

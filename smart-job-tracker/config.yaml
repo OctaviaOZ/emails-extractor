@@ -113,6 +113,7 @@ skip_domains:
 - jobagent.stepstone.de
 - indeed.com
 - linkedin.com
+- germantechjobs.de
 skip_emails: []
 start_date: '2023-04-30'
 status_keywords:
@@ -146,6 +147,11 @@ status_keywords:
   - Codility
   - Arbeitsprobe
   - Challenge
+  - Case Study
+  - Case-Study
+  - technische Aufgabe
+  - Probeaufgabe
+  - Probetag
   interview:
   - interview
   - schedule a call
@@ -157,6 +163,10 @@ status_keywords:
   - "Gespr\xE4ch einladen"
   - Terminvorschlag
   - Videointerview
+  - "Telefongespr\xE4ch"
+  - "Videogespr\xE4ch"
+  - "pers\xF6nliche Gespr\xE4ch"
+  - "n\xE4chste Runde einladen"
   offer:
   - job offer
   - employment offer
@@ -164,7 +174,7 @@ status_keywords:
   - Vertragsangebot
   - Vertragsentwurf
   - Arbeitsangebot
-  - "Angebot f\xFCr"
+  - Stellenangebot
   rejected:
   - reject
   - unfortunately
@@ -172,6 +182,12 @@ status_keywords:
   - not be proceeding
   - other candidates
   - not continuing
+  - can't consider you
+  - cannot consider you
+  - we are unable to consider
+  - wish you every success
+  - we wish you all the best
+  - find a suitable position
   - Absage
   - "nicht ber\xFCcksichtigen"
   - anderweitig entschieden

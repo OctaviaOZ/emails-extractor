@@ -41,7 +41,8 @@ SHARED_PLATFORMS: Set[str] = {
     'recruitee.com', 
     'personio.de', 
     'personio.com',
-    'workable.com'
+    'workable.com',
+    'empfehlungsbund.de'
 }
 
 GENERIC_DOMAINS: Set[str] = {
@@ -73,8 +74,9 @@ GENERIC_NAMES: Set[str] = {
 }
 
 PLATFORM_NAMES: Set[str] = {
-    'Workday', 'Greenhouse', 'SmartRecruiters', 'Lever', 'Ashby', 'Jobvite', 
-    'Breezy', 'Recruitee', 'Personio', 'Workable', 'SuccessFactors', 'SAP'
+    'Workday', 'Greenhouse', 'SmartRecruiters', 'Lever', 'Ashby', 'Jobvite',
+    'Breezy', 'Recruitee', 'Personio', 'Workable', 'SuccessFactors', 'SAP',
+    'Empfehlungsbund'
 }
 
 # --- Company Name Normalization Suffixes ---

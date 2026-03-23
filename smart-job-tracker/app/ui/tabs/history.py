@@ -18,11 +18,14 @@ def render_history_view(df, df_display):
     company_to_show = None
     if st.session_state.get("selected_kanban_company"):
         company_to_show = st.session_state.pop("selected_kanban_company")
-    elif not df.empty and 'company_name' in df.columns:
+    elif not df_display.empty and 'company_name' in df_display.columns:
         editor_state = st.session_state.get("pipeline_editor")
         if editor_state and editor_state.get("selection") and editor_state["selection"].get("rows"):
             selected_row_idx = editor_state["selection"]["rows"][0]
-            sorted_df = df_display.sort_values(by='last_updated', ascending=False)
+            # Use the same sort key as the dashboard table ('Last Update' formatted string
+            # when the filtered df is passed, raw datetime otherwise).
+            sort_col = 'Last Update' if 'Last Update' in df_display.columns else 'last_updated'
+            sorted_df = df_display.sort_values(by=sort_col, ascending=False).reset_index(drop=True)
             if selected_row_idx < len(sorted_df):
                 company_to_show = sorted_df.iloc[selected_row_idx]['company_name']
 
@@ -135,7 +138,11 @@ def _render_event_log(history, app_details):
         for h in history:
             history_data.append({
                 "Date": h.event_date.strftime('%Y-%m-%d %H:%M'),
-                "Event": f"{h.old_status} -> {h.new_status}" if h.old_status else f"New Application ({h.new_status})",
+                "Event": (
+                    f"New Application ({h.new_status})" if h.old_status is None
+                    else f"Email Received ({h.new_status})" if h.old_status == h.new_status
+                    else f"{h.old_status} -> {h.new_status}"
+                ),
                 "Summary": h.summary,
                 "Subject": h.email_subject
             })

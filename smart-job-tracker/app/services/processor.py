@@ -266,8 +266,7 @@ class ApplicationProcessor:
         self.session.add(app)
         self.session.commit()
 
-        if old_status != new_status:
-            self._log_event(app.id, old_status, new_status, data.summary, meta.get('subject', app.email_subject), timestamp)
+        self._log_event(app.id, old_status, new_status, data.summary, meta.get('subject', app.email_subject), timestamp)
         self._sync_detailed_records(app, data, timestamp)
         logger.info(f"🔄 Updated Application: {app.company_name} ({old_status} -> {new_status})")
 

@@ -11,7 +11,6 @@ from app.models import JobApplication
 # Import UI Components
 from app.ui.components.sidebar import render_sidebar
 from app.ui.tabs.dashboard import render_dashboard
-from app.ui.tabs.kanban import render_kanban
 from app.ui.tabs.settings import render_settings
 from app.ui.tabs.history import render_history_view
 
@@ -46,8 +45,10 @@ def main():
     st.set_page_config(page_title="Job Tracker", page_icon="💼", layout="wide")
     st.title("💼 Smart Job Application Tracker")
     
-    # Initialize DB (run migrations)
-    init_db()
+    # Initialize DB once per session — not on every Streamlit rerun
+    if "db_initialized" not in st.session_state:
+        init_db()
+        st.session_state.db_initialized = True
 
     # Render Sidebar
     render_sidebar()
@@ -79,19 +80,17 @@ def main():
     df = pd.DataFrame([a.model_dump() for a in apps]) if apps else pd.DataFrame()
         
     # --- TABS SELECTION ---
-    tab_dash, tab_kanban, tab_settings = st.tabs(["📊 Dashboard", "📋 Kanban Board", "⚙️ Settings"])
+    tab_dash, tab_settings = st.tabs(["📊 Dashboard", "⚙️ Settings"])
 
     with tab_dash:
-        render_dashboard(apps, df_all, df)
-
-    with tab_kanban:
-        render_kanban(apps)
+        df_filtered = render_dashboard(apps, df_all, df)
 
     with tab_settings:
         render_settings()
 
     # --- HISTORY VIEW ---
-    render_history_view(df, df)
+    # Pass the dashboard's filtered df so row-click selection stays in sync
+    render_history_view(df, df_filtered if df_filtered is not None else df)
 
 if __name__ == "__main__":
     main()

@@ -6,11 +6,12 @@ from datetime import datetime, UTC
 from sqlmodel import Session, select
 from app.models import JobApplication, ApplicationStatus, Interview, Assessment, Offer, ApplicationEventLog
 from app.core.database import engine
+from app.core.constants import KANBAN_STATUSES
 
 def render_dashboard(apps, df_all, df):
     if df_all.empty:
         st.info("No applications found. Click 'Sync' to start.")
-        return
+        return None
 
     with Session(engine) as session:
         # Display Stats
@@ -92,8 +93,10 @@ def render_dashboard(apps, df_all, df):
 
         st.subheader("Application Pipeline")
 
-        # Search + Filter row
-        search_col, filter_col = st.columns([0.6, 0.4])
+        # Search + Filter + View toggle row
+        view_col, search_col, filter_col = st.columns([0.2, 0.45, 0.35])
+        with view_col:
+            view_mode = st.radio("View", ["Table", "Pipeline"], horizontal=True, label_visibility="collapsed")
         with search_col:
             search_query = st.text_input("🔍 Search", placeholder="Company, position, notes...")
         with filter_col:
@@ -111,38 +114,82 @@ def render_dashboard(apps, df_all, df):
             df_display = df_display[mask]
         if filter_status != "All":
             df_display = df_display[df_display['status'] == filter_status]
-            
+
         df_display['Applied Date'] = pd.to_datetime(df_display['created_at']).dt.strftime('%Y-%m-%d')
         df_display['Last Update'] = pd.to_datetime(df_display['last_updated']).dt.strftime('%Y-%m-%d')
-        
-        # --- Master-Detail View ---
-        col_table, col_quick_edit = st.columns([0.65, 0.35])
 
-        with col_table:
-            st.dataframe(
-                df_display[['id', 'Applied Date', 'company_name', 'position', 'status', 'Last Update', 'summary', 'notes']].sort_values(by='Last Update', ascending=False),
-                width='stretch',
-                hide_index=True,
-                height=500,
-                column_config={
-                    "id": None, # Hide ID column
-                    "notes": st.column_config.TextColumn("Notes", width="medium"),
-                    "Applied Date": st.column_config.Column(disabled=True),
-                    "company_name": st.column_config.Column("Company", disabled=True),
-                    "position": st.column_config.Column("Position", disabled=True),
-                    "status": st.column_config.Column("Status", disabled=True),
-                    "Last Update": st.column_config.Column(disabled=True),
-                    "summary": st.column_config.Column("Summary", disabled=True),
-                },
-                key="pipeline_editor",
-                on_select="rerun",
-                selection_mode="single-row"
-            )
-
-        with col_quick_edit:
-            _render_quick_edit(df_display)
+        if view_mode == "Table":
+            col_table, col_quick_edit = st.columns([0.65, 0.35])
+            with col_table:
+                st.dataframe(
+                    df_display[['id', 'Applied Date', 'company_name', 'position', 'status', 'Last Update', 'summary', 'notes']].sort_values(by='Last Update', ascending=False),
+                    width='stretch',
+                    hide_index=True,
+                    height=500,
+                    column_config={
+                        "id": None,
+                        "notes": st.column_config.TextColumn("Notes", width="medium"),
+                        "Applied Date": st.column_config.Column(disabled=True),
+                        "company_name": st.column_config.Column("Company", disabled=True),
+                        "position": st.column_config.Column("Position", disabled=True),
+                        "status": st.column_config.Column("Status", disabled=True),
+                        "Last Update": st.column_config.Column(disabled=True),
+                        "summary": st.column_config.Column("Summary", disabled=True),
+                    },
+                    key="pipeline_editor",
+                    on_select="rerun",
+                    selection_mode="single-row"
+                )
+            with col_quick_edit:
+                _render_quick_edit(df_display)
+        else:
+            _render_pipeline_view(df_display)
 
         st.caption("💡 Tip: Select a row to see full history below.")
+
+    return df_display
+
+def _render_pipeline_view(df_display):
+    present_statuses = [s for s in KANBAN_STATUSES if not df_display[df_display['status'] == s.value].empty]
+    if not present_statuses:
+        st.info("No applications match the current filter.")
+        return
+
+    tab_labels = [f"{s.value} ({len(df_display[df_display['status'] == s.value])})" for s in present_statuses]
+    status_tabs = st.tabs(tab_labels)
+
+    for tab, status in zip(status_tabs, present_statuses):
+        with tab:
+            status_df = (
+                df_display[df_display['status'] == status.value]
+                .sort_values('Last Update', ascending=False)
+                .reset_index(drop=True)
+            )
+            sel_key = f"pipeline_view_{status.value}"
+            st.dataframe(
+                status_df[['id', 'company_name', 'position', 'Last Update', 'summary']],
+                hide_index=True,
+                height=min(38 * len(status_df) + 40, 420),
+                key=sel_key,
+                on_select="rerun",
+                selection_mode="single-row",
+                column_config={
+                    "id": None,
+                    "company_name": st.column_config.Column("Company", width="medium"),
+                    "position": st.column_config.Column("Position", width="medium"),
+                    "Last Update": st.column_config.Column("Last Update", width="small"),
+                    "summary": st.column_config.Column("Latest Update", width="large"),
+                }
+            )
+            sel_state = st.session_state.get(sel_key)
+            if sel_state and sel_state.get("selection") and sel_state["selection"].get("rows"):
+                idx = sel_state["selection"]["rows"][0]
+                if idx < len(status_df):
+                    company = status_df.iloc[idx]["company_name"]
+                    if st.session_state.get("history_company_select") != company:
+                        st.session_state["history_company_select"] = company
+                        st.rerun()
+
 
 def _render_quick_edit(df_display):
     # Handle selection logic for the quick edit panel

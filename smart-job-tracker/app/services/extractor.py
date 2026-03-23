@@ -61,7 +61,11 @@ class ApplicationData(BaseModel):
     company_name: str = Field(description="Name of the employer (e.g., 'Google').")
     position: Optional[str] = Field(default="Unknown Position", description="Job title.")
     status: ApplicationStatus = Field(description="Current application status.")
-    summary: Optional[str] = Field(default="No summary provided", description="One-sentence summary.")
+    summary: Optional[str] = Field(
+        default="No summary provided",
+        max_length=120,
+        description="One sentence (≤15 words) describing the email purpose. Same language as the email."
+    )
     is_rejection: bool = Field(description="Whether the email is a rejection.")
     next_step: Optional[str] = Field(default="Wait for feedback", description="Identified next step.")
 
@@ -92,8 +96,36 @@ class ApplicationData(BaseModel):
             data.setdefault('is_rejection', False)
             data.setdefault('position', "Unknown Position")
             data.setdefault('next_step', "Wait for feedback")
+
+            # Hard-cap summary regardless of source (LLM verbosity guard)
+            summary = data.get('summary')
+            if isinstance(summary, str) and len(summary) > 120:
+                data['summary'] = summary[:117] + "..."
                 
         return data
+
+_EXTRACTION_SYSTEM = (
+    "You are a recruitment assistant. Extract job application data as JSON.\n"
+    "Rules:\n"
+    "- company_name: actual employer name (e.g. 'Siemens', 'Zalando').\n"
+    "  NEVER a platform (Workday, Greenhouse, LinkedIn, StepStone, Indeed, Personio…).\n"
+    "  If the email is a newsletter, job alert, or subscription confirmation (not a direct reply to an application), set company_name to 'Unknown'.\n"
+    "- position: exact job title from the email (e.g. 'Senior Backend Engineer', 'Data Analyst').\n"
+    "  Extract from subject line, salutation, or body. If truly not mentioned, set to null.\n"
+    "- status: choose exactly ONE:\n"
+    "    Applied    — application received/acknowledged (Eingangsbestätigung, Bewerbung erhalten)\n"
+    "    Interview  — invitation to meet, call, or video interview (Vorstellungsgespräch, Kennenlernen, Einladung zum Gespräch)\n"
+    "    Assessment — coding challenge, take-home task, or test (Aufgabe, Eignungstest, Challenge, HackerRank, Case Study)\n"
+    "    Offer      — explicit job offer or contract sent (Vertragsangebot, Arbeitsangebot, Stellenangebot, 'pleased to offer')\n"
+    "    Rejected   — application declined (Absage, leider, nicht berücksichtigen, anderweitig entschieden)\n"
+    "    Pending    — still reviewing, no decision yet (in Prüfung, werden uns melden, werden Sie informieren)\n"
+    "- summary: ONE sentence, max 15 words, same language as the email.\n"
+    "  Good: 'Coding challenge invited for Backend Engineer role.'\n"
+    "  Good: 'Absage nach Bewerbung als Data Engineer erhalten.'\n"
+    "  Bad: 'Thank you for your application. We have reviewed your profile and…'\n"
+    "- is_rejection: true only if the email clearly declines the candidate\n"
+    "Respond ONLY with valid JSON."
+)
 
 class LLMProvider(ABC):
     """Base class for LLM-based data extraction."""
@@ -154,28 +186,21 @@ class LocalProvider(LLMProvider):
         raise ValueError(f"Could not parse JSON from text: {text[:100]}...")
 
     def extract(self, sender: str, subject: str, body: str) -> ApplicationData:
-        system_prompt = (
-            "You are a professional recruitment assistant. Extract structured job application data in JSON format.\n"
-            "IGNORE platform names (Workday, Greenhouse, etc.). Use the actual employer name.\n"
-            "Statuses: [Applied, Interview, Assessment, Offer, Rejected, Pending].\n"
-            "Keep 'summary' under 15 words.\n"
-            "Respond ONLY with valid JSON."
-        )
-        user_content = f"Sender: {sender}\nSubject: {subject}\nBody: {body[:3000]}"
-        
+        user_content = f"Sender: {sender}\nSubject: {subject}\nBody:\n{body[:1500]}"
+
         schema_json = json.dumps(ApplicationData.model_json_schema())
         grammar = LlamaGrammar.from_json_schema(schema_json)
-        
+
         response = self.llm.create_chat_completion(
             messages=[
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": _EXTRACTION_SYSTEM},
                 {"role": "user", "content": user_content}
             ],
             max_tokens=settings.ai.max_tokens,
             temperature=settings.ai.temperature,
             grammar=grammar
         )
-        
+
         text = response['choices'][0]['message']['content']
         data = self._parse_json(text)
         return ApplicationData(**data)
@@ -187,20 +212,21 @@ class ClaudeProvider(LLMProvider):
         self.client = anthropic.Anthropic(api_key=api_key)
 
     def extract(self, sender: str, subject: str, body: str) -> ApplicationData:
-        prompt = f"Extract job application data. Ignore platforms.\nSender: {sender}\nSubject: {subject}\nBody: {body[:10000]}"
+        user_prompt = f"Sender: {sender}\nSubject: {subject}\nBody:\n{body[:3000]}"
         response = self.client.messages.create(
             model="claude-3-5-sonnet-20241022",
-            max_tokens=1024,
+            max_tokens=512,
+            system=_EXTRACTION_SYSTEM,
             tools=[{
                 "name": "extract_job_data",
-                "description": "Extract job application data",
+                "description": "Extract structured job application data from an email.",
                 "input_schema": ApplicationData.model_json_schema()
             }],
             tool_choice={"type": "tool", "name": "extract_job_data"},
-            messages=[{"role": "user", "content": prompt}]
+            messages=[{"role": "user", "content": user_prompt}]
         )
         if response.content and response.content[0].type == 'tool_use':
-             return ApplicationData(**response.content[0].input)
+            return ApplicationData(**response.content[0].input)
         raise ValueError("Claude extraction failed")
 
 class OpenAIProvider(LLMProvider):
@@ -213,8 +239,8 @@ class OpenAIProvider(LLMProvider):
         completion = self.client.beta.chat.completions.parse(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "Extract employer and status precisely."},
-                {"role": "user", "content": f"Sender: {sender}\nSubject: {subject}\nBody: {body[:8000]}"}
+                {"role": "system", "content": _EXTRACTION_SYSTEM},
+                {"role": "user", "content": f"Sender: {sender}\nSubject: {subject}\nBody:\n{body[:3000]}"}
             ],
             response_format=ApplicationData,
         )
@@ -228,7 +254,10 @@ class GeminiProvider(LLMProvider):
         self.model = genai.GenerativeModel('gemini-2.0-flash')
 
     def extract(self, sender: str, subject: str, body: str) -> ApplicationData:
-        prompt = f"Extract job data JSON. Ignore platforms.\nEmail: {sender} | {subject} | {body[:8000]}"
+        prompt = (
+            f"{_EXTRACTION_SYSTEM}\n\n"
+            f"Sender: {sender}\nSubject: {subject}\nBody:\n{body[:3000]}"
+        )
         response = self.model.generate_content(
             prompt,
             generation_config={"response_mime_type": "application/json"}
@@ -278,20 +307,60 @@ class EmailExtractor:
         except Exception as e:
             logger.error(f"Failed to initialize provider {provider_type}: {e}")
 
-    def extract(self, subject: str, sender: str, body_text: str, body_html: str = "") -> ApplicationData:
+    def extract(self, subject: str, sender: str, body_text: str, body_html: str = "",
+                email_date: Optional[str] = None) -> ApplicationData:
         effective_body = body_html if body_html else body_text
-        
+        tag = f"{email_date or '?'} | {sender}"
+
         if self.provider:
             try:
                 result = self.provider.extract(sender, subject, effective_body)
+                logger.info(
+                    "[EXTRACT] %s | LLM(%s) → company=%r status=%s is_rejection=%s summary=%r",
+                    tag, self.provider.__class__.__name__,
+                    result.company_name, result.status.value,
+                    result.is_rejection, result.summary,
+                )
                 result = self._refine_company(result, sender, effective_body)
-                return self._refine_status(result, subject, effective_body)
+                result = self._refine_status(result, subject, effective_body)
+                result = self._refine_summary(result, subject)
+                logger.info(
+                    "[EXTRACT] %s | REFINED   → company=%r status=%s summary=%r",
+                    tag, result.company_name, result.status.value, result.summary,
+                )
+                return result
             except Exception as e:
-                logger.warning(f"Provider {self.provider.__class__.__name__} failed: {e}")
-        
-        logger.warning("AI extraction unavailable or failed. Falling back to heuristics.")
+                logger.warning(
+                    "[EXTRACT] %s | LLM(%s) failed: %s — falling back to heuristics",
+                    tag, self.provider.__class__.__name__, e,
+                )
+
         result = self._extract_heuristic(subject, sender, body_text)
-        return self._refine_status(result, subject, body_text)
+        logger.info(
+            "[EXTRACT] %s | HEURISTIC → company=%r status=%s",
+            tag, result.company_name, result.status.value,
+        )
+        result = self._refine_status(result, subject, body_text)
+        result = self._refine_summary(result, subject)
+        logger.info(
+            "[EXTRACT] %s | HEU+REFINE → company=%r status=%s summary=%r",
+            tag, result.company_name, result.status.value, result.summary,
+        )
+        return result
+
+    def _refine_summary(self, data: ApplicationData, subject: str) -> ApplicationData:
+        """Last-resort summary guard: fall back to subject if summary is missing or too long."""
+        summary = (data.summary or "").strip()
+
+        # Treat generic/empty summaries as missing
+        if not summary or summary.lower() in ("no summary provided", "extracted via heuristics", "application update/communication"):
+            # Use subject as a concise, factual fallback
+            clean_subject = re.sub(r'\s+', ' ', subject).strip()
+            data.summary = clean_subject[:117] + "..." if len(clean_subject) > 120 else clean_subject
+        elif len(summary) > 120:
+            data.summary = summary[:117] + "..."
+
+        return data
 
     def _refine_company(self, data: ApplicationData, sender: str, text: str) -> ApplicationData:
         platforms = settings.extraction.platforms
@@ -329,11 +398,20 @@ class EmailExtractor:
 
         return data
 
+    # Rejection keywords that require at least one other rejection keyword to co-occur
+    _WEAK_REJECTION_KWS = {"unfortunately", "other candidates", "abgeschlossen"}
+
     def _refine_status(self, data: ApplicationData, subject: str, text: str) -> ApplicationData:
         search_text = (subject + " " + text).lower()
-        
+
         # Priority 1: Explicit Rejection Keywords (Always override)
-        if any(w.lower() in search_text for w in settings.status_keywords.rejected):
+        # Weak keywords only count if another rejection keyword also matches
+        rejected_kws = settings.status_keywords.rejected
+        matched = [w for w in rejected_kws if w.lower() in search_text]
+        strong_matched = [w for w in matched if w.lower() not in self._WEAK_REJECTION_KWS]
+        weak_only = matched and not strong_matched
+        is_rejection = bool(strong_matched) or (weak_only and len(matched) >= 2)
+        if is_rejection:
             data.status = ApplicationStatus.REJECTED
             data.is_rejection = True
             return data
@@ -449,9 +527,19 @@ class EmailExtractor:
                         company = res
                         break
 
+        # Try to extract position from subject line
+        position = None
+        position_match = re.search(
+            r'(?i)(?:bewerbung(?:\s+als)?|application(?:\s+for)?|stelle(?:\s+als)?|position[:\s]+|role[:\s]+)\s*([A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß\s\-/()]{2,60}?)(?:\s*[-|@(]|$)',
+            subject
+        )
+        if position_match:
+            position = position_match.group(1).strip()
+
         return ApplicationData(
-            company_name=company, 
-            status=ApplicationStatus.APPLIED, 
+            company_name=company,
+            position=position,
+            status=ApplicationStatus.APPLIED,
             summary="Extracted via heuristics",
             is_rejection=False
         )

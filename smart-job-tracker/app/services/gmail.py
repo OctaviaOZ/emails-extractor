@@ -20,38 +20,72 @@ logger = logging.getLogger(__name__)
 
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
-def clean_html_for_llm(html: str) -> str:
+_SIGNATURE_PATTERNS = re.compile(
+    r'(--\s*\n|_{3,}|-{3,}|'                        # common signature dividers
+    r'unsubscribe|abmelden|abbestellen|'              # unsubscribe (EN/DE)
+    r'von meinem iphone|sent from my|'               # mobile signatures
+    r'diese e-mail wurde|this email was sent|'        # boilerplate footer starts
+    r'impressum|datenschutz|privacy policy|'          # legal footer markers
+    r'if you.*no longer.*receive|'                    # unsubscribe prose
+    r'copyright\s*©|\ball rights reserved\b)',        # copyright lines
+    re.IGNORECASE,
+)
+
+def clean_html_for_llm(html: str, max_chars: int = 1500) -> str:
     """
-    Cleans HTML content to be LLM-friendly while preserving table structures.
+    Cleans HTML content to be LLM-friendly.
+    Strips noise (signatures, footers, unsubscribe, prior thread) and caps output.
     """
     if not html:
         return ""
-    
-    soup = BeautifulSoup(html, "html.parser")
-    
-    # Remove non-content elements
-    for script_or_style in soup(["script", "style", "nav", "footer", "header", "meta", "link"]):
-        script_or_style.decompose()
 
-    # Convert tables to Markdown-like text
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Remove non-content elements
+    for tag in soup(["script", "style", "nav", "footer", "header", "meta", "link"]):
+        tag.decompose()
+
+    # Remove elements that are purely decorative / footer-like by common class/id names.
+    # Collect first, then decompose — decompose() recursively clears children, so calling
+    # .get() on already-decomposed siblings later in the same iteration raises AttributeError.
+    tags_to_remove = [
+        tag for tag in soup.find_all(True)
+        if re.search(
+            r'footer|signature|unsubscribe|disclaimer|legal|mso-',
+            " ".join(tag.get("class") or []) + (tag.get("id") or ""),
+            re.IGNORECASE,
+        )
+    ]
+    for tag in tags_to_remove:
+        tag.decompose()
+
+    # Convert tables to Markdown-like text (keep it lightweight — first 5 rows only)
     for table in soup.find_all("table"):
+        rows = table.find_all("tr")[:5]
         table_text = []
-        for row in table.find_all("tr"):
+        for row in rows:
             cells = [cell.get_text(strip=True) for cell in row.find_all(["td", "th"])]
             if any(cells):
                 table_text.append("| " + " | ".join(cells) + " |")
-        
-        if table_text:
-            table_md = "\n" + "\n".join(table_text) + "\n"
-            table.replace_with(table_md)
+        table.replace_with(("\n" + "\n".join(table_text) + "\n") if table_text else "")
 
-    text = soup.get_text(separator=' ', strip=True)
-    
-    # Clean up whitespace
+    text = soup.get_text(separator="\n", strip=True)
+
+    # Drop everything from the first signature/footer marker onwards
+    match = _SIGNATURE_PATTERNS.search(text)
+    if match:
+        text = text[:match.start()]
+
+    # Collapse whitespace
     text = re.sub(r'[ \t]+', ' ', text)
-    text = re.sub(r'\n\s*\n', '\n\n', text)
-    
-    return text.strip()
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = text.strip()
+
+    # Hard cap — LLM only needs the opening of the email to understand intent
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n[…]"
+
+    return text
 
 def get_gmail_service(token_path: str = None, scopes: Optional[List[str]] = None) -> Resource:
     """Authenticates and returns the Gmail API service using Secret Manager."""
@@ -144,7 +178,7 @@ def _parse_message_response(message: Dict[str, Any], msg_id: str) -> Dict[str, A
         nonlocal body_text, body_html
         for part in parts_list:
             mime_type = part.get('mimeType')
-            data = part.get('body', {}).get('data')
+            data = (part.get('body') or {}).get('data')
             if data:
                 decoded = base64.urlsafe_b64decode(data.encode('UTF-8')).decode('utf-8', errors='replace')
                 if mime_type == 'text/plain':
@@ -155,7 +189,7 @@ def _parse_message_response(message: Dict[str, Any], msg_id: str) -> Dict[str, A
                 find_parts(part['parts'])
     
     parts = payload.get('parts', [])
-    if not parts and payload.get('body', {}).get('data'):
+    if not parts and (payload.get('body') or {}).get('data'):
         data = payload['body']['data']
         decoded = base64.urlsafe_b64decode(data.encode('UTF-8')).decode('utf-8', errors='replace')
         if payload.get('mimeType') == 'text/plain':
