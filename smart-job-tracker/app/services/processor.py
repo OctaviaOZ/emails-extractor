@@ -65,7 +65,8 @@ class ApplicationProcessor:
 
             # Tier 2: Exact Email Match
             if sender_email and app_email and sender_email == app_email:
-                if not self._is_shared_email(sender_email):
+                sender_domain_t2 = sender_email.split('@')[1] if '@' in sender_email else ""
+                if not self._is_shared_email(sender_email) and not self._is_shared_domain(sender_domain_t2):
                     return True
 
             # Tier 2.5: Historical Company Email Match
@@ -107,7 +108,10 @@ class ApplicationProcessor:
         return email in SHARED_EMAILS
 
     def _is_shared_domain(self, domain: str) -> bool:
-        return domain in SHARED_PLATFORMS
+        if domain in SHARED_PLATFORMS:
+            return True
+        # Treat subdomains of shared platforms as shared (e.g. us.greenhouse-mail.io)
+        return any(domain.endswith('.' + p) for p in SHARED_PLATFORMS)
 
     def _is_generic_domain(self, domain: str) -> bool:
         return domain in GENERIC_DOMAINS
@@ -245,7 +249,8 @@ class ApplicationProcessor:
         app.status = new_status
         
         app_last_updated = app.last_updated if app.last_updated.tzinfo else app.last_updated.replace(tzinfo=UTC)
-        if timestamp >= app_last_updated:
+        ts_aware = timestamp if timestamp.tzinfo else timestamp.replace(tzinfo=UTC)
+        if ts_aware >= app_last_updated:
             app.last_updated = timestamp
             app.email_id = meta.get('id', app.email_id)
             app.email_subject = meta.get('subject', app.email_subject)

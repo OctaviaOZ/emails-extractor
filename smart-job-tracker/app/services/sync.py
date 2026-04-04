@@ -1,5 +1,6 @@
 import logging
 import re
+import time
 from datetime import datetime, UTC
 from typing import Callable, Optional, Dict, Tuple, Any
 from sqlmodel import Session
@@ -64,31 +65,42 @@ class SyncService:
                     progress_callback(min((i + len(batch_chunk)) / total_msgs, 1.0), "Skipping old emails...")
                 continue
 
-            try:
-                full_msgs = batch_get_message_bodies(service, msg_ids_to_fetch)
-                
-                for j, full_msg in enumerate(full_msgs):
-                    msg_id = full_msg['id']
-                    thread_id = thread_map.get(msg_id)
-                    success = self._process_message(full_msg, thread_id=thread_id)
-                    
-                    if success:
-                        new_emails_count += 1
-                    else:
-                        errors_count += 1
-                    
-                    if progress_callback:
-                        progress_callback(
-                            min((i + already_processed + j + 1) / total_msgs, 1.0), 
-                            f"Processed: {full_msg.get('subject', 'Email')[:30]}..."
-                        )
-            except Exception as e:
-                logger.error(f"Batch processing error: {e}")
+            full_msgs = self._fetch_with_retry(service, msg_ids_to_fetch)
+            if full_msgs is None:
                 errors_count += len(msg_ids_to_fetch)
                 continue
+
+            for j, full_msg in enumerate(full_msgs):
+                msg_id = full_msg['id']
+                thread_id = thread_map.get(msg_id)
+                success = self._process_message(full_msg, thread_id=thread_id)
+
+                if success:
+                    new_emails_count += 1
+                else:
+                    errors_count += 1
+
+                if progress_callback:
+                    progress_callback(
+                        min((i + already_processed + j + 1) / total_msgs, 1.0),
+                        f"Processed: {full_msg.get('subject', 'Email')[:30]}..."
+                    )
         
         logger.info(f"Sync complete. {new_emails_count} new, {errors_count} errors.")
         return new_emails_count, errors_count
+
+    def _fetch_with_retry(self, service: Any, msg_ids: list, max_retries: int = 3) -> Optional[list]:
+        """Fetches messages with exponential backoff retry. Returns None on persistent failure."""
+        for attempt in range(max_retries):
+            try:
+                return batch_get_message_bodies(service, msg_ids)
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    logger.error(f"Batch processing error after {max_retries} attempts: {e}")
+                    return None
+                wait = 2 ** attempt
+                logger.warning(f"Batch fetch attempt {attempt + 1} failed: {e}, retrying in {wait}s...")
+                time.sleep(wait)
 
     def _process_message(self, full_msg: Dict, thread_id: Optional[str] = None) -> bool:
         """Processes a single email message."""

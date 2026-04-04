@@ -29,20 +29,25 @@ STATUS_RANK: Dict[ApplicationStatus, int] = {
 
 # --- Shared Platforms & Email Domains ---
 SHARED_PLATFORMS: Set[str] = {
-    'myworkdayjobs.com', 
-    'successfactors.eu', 
-    'successfactors.com', 
-    'greenhouse.io', 
-    'smartrecruiters.com', 
-    'lever.co', 
-    'ashby.io', 
-    'jobvite.com', 
-    'breezy.hr', 
-    'recruitee.com', 
-    'personio.de', 
+    'myworkdayjobs.com',
+    'successfactors.eu',
+    'successfactors.com',
+    'greenhouse.io',
+    'greenhouse-mail.io',
+    'smartrecruiters.com',
+    'lever.co',
+    'ashby.io',
+    'jobvite.com',
+    'breezy.hr',
+    'recruitee.com',
+    'personio.de',
     'personio.com',
     'workable.com',
-    'empfehlungsbund.de'
+    'empfehlungsbund.de',
+    'softgarden.io',
+    'teamtailor-mail.com',
+    'concludis.de',
+    'manatal.com',
 }
 
 GENERIC_DOMAINS: Set[str] = {

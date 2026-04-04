@@ -62,7 +62,7 @@ class ApplicationData(BaseModel):
     position: Optional[str] = Field(default="Unknown Position", description="Job title.")
     status: ApplicationStatus = Field(description="Current application status.")
     summary: Optional[str] = Field(
-        default="No summary provided",
+        default=None,
         max_length=120,
         description="One sentence (≤15 words) describing the email purpose. Same language as the email."
     )
@@ -92,7 +92,7 @@ class ApplicationData(BaseModel):
             else:
                 data['status'] = ApplicationStatus.UNKNOWN
             
-            data.setdefault('summary', "No summary provided")
+            data.setdefault('summary', None)
             data.setdefault('is_rejection', False)
             data.setdefault('position', "Unknown Position")
             data.setdefault('next_step', "Wait for feedback")
@@ -120,9 +120,12 @@ _EXTRACTION_SYSTEM = (
     "    Rejected   — application declined (Absage, leider, nicht berücksichtigen, anderweitig entschieden)\n"
     "    Pending    — still reviewing, no decision yet (in Prüfung, werden uns melden, werden Sie informieren)\n"
     "- summary: ONE sentence, max 15 words, same language as the email.\n"
-    "  Good: 'Coding challenge invited for Backend Engineer role.'\n"
-    "  Good: 'Absage nach Bewerbung als Data Engineer erhalten.'\n"
+    "  ALWAYS write a real summary — NEVER output null or an empty string.\n"
+    "  Good (EN): 'Coding challenge invited for Backend Engineer role.'\n"
+    "  Good (DE): 'Absage nach Bewerbung als Data Engineer erhalten.'\n"
+    "  Good (DE): 'Einladung zum Vorstellungsgespräch als Senior Data Engineer.'\n"
     "  Bad: 'Thank you for your application. We have reviewed your profile and…'\n"
+    "  If unsure, summarise the subject line in one sentence.\n"
     "- is_rejection: true only if the email clearly declines the candidate\n"
     "Respond ONLY with valid JSON."
 )
@@ -348,15 +351,18 @@ class EmailExtractor:
         )
         return result
 
+    _GENERIC_SUMMARIES = {"no summary provided", "extracted via heuristics", "application update/communication"}
+    _SUBJECT_PREFIX_RE = re.compile(r'^(?:re|fwd?|aw|wg|sv|antw|antwort):\s*', re.IGNORECASE)
+
     def _refine_summary(self, data: ApplicationData, subject: str) -> ApplicationData:
         """Last-resort summary guard: fall back to subject if summary is missing or too long."""
         summary = (data.summary or "").strip()
 
-        # Treat generic/empty summaries as missing
-        if not summary or summary.lower() in ("no summary provided", "extracted via heuristics", "application update/communication"):
-            # Use subject as a concise, factual fallback
-            clean_subject = re.sub(r'\s+', ' ', subject).strip()
-            data.summary = clean_subject[:117] + "..." if len(clean_subject) > 120 else clean_subject
+        if not summary or summary.lower() in self._GENERIC_SUMMARIES:
+            # Strip common reply/forward prefixes before using subject as fallback
+            clean = self._SUBJECT_PREFIX_RE.sub('', subject).strip()
+            clean = re.sub(r'\s+', ' ', clean)
+            data.summary = clean[:117] + "..." if len(clean) > 120 else clean
         elif len(summary) > 120:
             data.summary = summary[:117] + "..."
 
