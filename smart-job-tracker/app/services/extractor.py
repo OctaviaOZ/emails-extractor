@@ -327,9 +327,10 @@ class EmailExtractor:
                 result = self._refine_company(result, sender, effective_body)
                 result = self._refine_status(result, subject, effective_body)
                 result = self._refine_summary(result, subject)
+                result = self._refine_position(result, subject)
                 logger.info(
-                    "[EXTRACT] %s | REFINED   → company=%r status=%s summary=%r",
-                    tag, result.company_name, result.status.value, result.summary,
+                    "[EXTRACT] %s | REFINED   → company=%r status=%s position=%r summary=%r",
+                    tag, result.company_name, result.status.value, result.position, result.summary,
                 )
                 return result
             except Exception as e:
@@ -345,9 +346,10 @@ class EmailExtractor:
         )
         result = self._refine_status(result, subject, body_text)
         result = self._refine_summary(result, subject)
+        result = self._refine_position(result, subject)
         logger.info(
-            "[EXTRACT] %s | HEU+REFINE → company=%r status=%s summary=%r",
-            tag, result.company_name, result.status.value, result.summary,
+            "[EXTRACT] %s | HEU+REFINE → company=%r status=%s position=%r summary=%r",
+            tag, result.company_name, result.status.value, result.position, result.summary,
         )
         return result
 
@@ -366,6 +368,32 @@ class EmailExtractor:
         elif len(summary) > 120:
             data.summary = summary[:117] + "..."
 
+        return data
+
+    _POSITION_RE = re.compile(
+        r'(?i)(?:bewerbung\s+(?:als|für|um)|application\s+(?:for|as)|stelle\s+als|position[:\s]+|role[:\s]+)'
+        r'\s*([A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß\s\-/()]{2,60}?)(?:\s*[-|@(]|$)'
+    )
+    # Gender/diversity suffixes common in German job postings
+    _GENDER_SUFFIX_RE = re.compile(
+        r'\s*\((?:m/w/d|m/f/d|f/m/d|w/m/d|w/m/x|m/w/x|d/f/m|d/w/m|gn|all\s+genders?)\)',
+        re.IGNORECASE
+    )
+
+    def _refine_position(self, data: ApplicationData, subject: str) -> ApplicationData:
+        """Extracts position from the subject line when the LLM returned nothing useful."""
+        if data.position and data.position != "Unknown Position":
+            return data
+        m = self._POSITION_RE.search(subject)
+        if m:
+            pos = m.group(1).strip()
+            # Strip German filler before the actual title ("die Stelle als …", "eine Stelle als …")
+            pos = re.sub(r'^(?:die|eine)\s+Stelle\s+als\s+', '', pos, flags=re.IGNORECASE).strip()
+            # Strip trailing context words ("role", "at", "bei", "im", …)
+            pos = re.sub(r'\s+(?:role|position|job|stelle|bei|at|im|in)\b.*$', '', pos, flags=re.IGNORECASE).strip()
+            pos = self._GENDER_SUFFIX_RE.sub('', pos).strip()
+            if pos:
+                data.position = pos
         return data
 
     def _refine_company(self, data: ApplicationData, sender: str, text: str) -> ApplicationData:

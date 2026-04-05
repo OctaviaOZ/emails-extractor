@@ -1,6 +1,8 @@
 ai:
-  provider: local
   local_model_name: HuggingFaceTB_SmolLM3-3B-Q4_K_M.gguf
+  max_tokens: 768
+  provider: local
+  temperature: 0.1
 extraction:
   generic_names:
   - noreply
@@ -114,6 +116,9 @@ skip_domains:
 - indeed.com
 - linkedin.com
 - germantechjobs.de
+- mckinsey.com
+- app.instaffo.com
+- inco-group.co
 skip_emails: []
 start_date: '2023-04-30'
 status_keywords:
@@ -196,7 +201,7 @@ status_keywords:
   - auf andere Stellen zu bewerben
   - "w\xFCnschen Dir viel Erfolg"
   - "w\xFCnschen Ihnen viel Erfolg"
-  - reges Interesse gestoßen
+  - "reges Interesse gesto\xDFen"
   - "gro\xDFe Anzahl an"
   - anderen Kandidaten den Vorzug
   - nicht in die n\xE4chste Runde
